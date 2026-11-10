@@ -111,6 +111,83 @@ function checkStatic() {
     if (n < 2) fail(`第 ${i + 1} 题只有 ${n} 条线索，太少了`);
   });
 
+  // 1.3b G03 §5.1/§5.5：剪影改程序化（WGMask），题库扩到 18 题，且不再新增图片素材。
+  //      防回归：assets/silhouettes/ 一直只能是原来那 9 张 PNG；新题一律走 fig 数据。
+  const figBlocks = [...qBlock.matchAll(/fig:\s*\{([^{}]*)\}/g)].map((m) => m[1]);
+  const silPaths = [...qBlock.matchAll(/\bsil:\s*"([^"]+)"/g)].map((m) => m[1]);
+  const bodyBlock = wg.slice(wg.indexOf("const BODIES = {"), wg.indexOf("const PROPS = {"));
+  const bodyKeys = [...bodyBlock.matchAll(/(\w+):\s*function\s*\(ctx\)/g)].map((m) => m[1]);
+  const propBlock = wg.slice(wg.indexOf("const PROPS = {"), wg.indexOf("const QUESTIONS = ["));
+  const propKeys = [...propBlock.matchAll(/(\w+):\s*function\s*\(ctx\)/g)].map((m) => m[1]);
+  if (answers.length !== 18) fail(`G03 题库是 ${answers.length} 题，§5.5 要求 18 题（三类各 6 道）`);
+  if (figBlocks.length !== 9) fail(`G03 用 fig 的新题是 ${figBlocks.length} 道，应该是 9 道`);
+  if (silPaths.length !== 9) fail(`G03 保留 PNG 的老题是 ${silPaths.length} 道，应该是 9 道`);
+  if (bodyKeys.length !== 4) fail(`WGMask 体型应该有 4 种，现在有 ${bodyKeys.length} 种`);
+  if (propKeys.length < 20) fail(`WGMask 道具表只有 ${propKeys.length} 件，§5.1 要求约 20 件`);
+  figBlocks.forEach((body, i) => {
+    const propsM = body.match(/props:\s*\[([^\]]*)\]/);
+    const props = propsM
+      ? propsM[1].split(",").map((s) => s.trim().replace(/^"|"$/g, "")).filter(Boolean) : [];
+    if (!props.length) fail(`G03 第 ${i + 1} 道 fig 题没有道具`);
+    props.forEach((p) => {
+      if (propKeys.indexOf(p) < 0) fail(`G03 有题目的 fig.props 用了道具表里没有的「${p}」`);
+    });
+    const bodyM = body.match(/body:\s*"(\w+)"/);
+    if (!bodyM || bodyKeys.indexOf(bodyM[1]) < 0) {
+      fail(`G03 有题目的 fig.body 不在体型表里：${bodyM ? bodyM[1] : "?"}`);
+    }
+  });
+  {
+    const silDir = path.join(ROOT, "assets/silhouettes");
+    const silFiles = fs.existsSync(silDir)
+      ? fs.readdirSync(silDir).filter((f) => /\.png$/i.test(f)) : [];
+    if (silFiles.length !== 9) {
+      fail(`assets/silhouettes/ 里有 ${silFiles.length} 张图，扩题前后都该是 9 张（§5.1 不许新增图片素材）`);
+    }
+  }
+  // 每条线索都要带类别 k（look / story / quote），一题里至少两类，玩家才有的挑。
+  // 注意 qBlock 里还跟着「换你出题」的 SWAP_ROUNDS（那三组也带 clues），只看前 18 组。
+  const clueBlocks = [...qBlock.matchAll(/clues:\s*\[([\s\S]*?)\]/g)].map((m) => m[1])
+    .slice(0, answers.length);
+  clueBlocks.forEach((body, i) => {
+    const kinds = [...body.matchAll(/k:\s*"(\w+)"/g)].map((m) => m[1]);
+    if (kinds.length !== 3) fail(`G03 第 ${i + 1} 题有 ${kinds.length} 条线索带类别，应该是 3 条`);
+    kinds.forEach((k) => {
+      if (["look", "story", "quote"].indexOf(k) < 0) {
+        fail(`G03 第 ${i + 1} 题线索类别「${k}」不在 look/story/quote 里`);
+      }
+    });
+    if (new Set(kinds).size < 2) fail(`G03 第 ${i + 1} 题的线索只有一类，玩家没得挑`);
+  });
+  // 抽题按类别各取 2 道，三个类别都得凑得出来
+  const catList = [...qBlock.matchAll(/cat:\s*"(anime|game|movie)"/g)].map((m) => m[1]);
+  if (catList.length !== answers.length) fail(`G03 有 ${catList.length} 道题标了类别，题库是 ${answers.length} 道`);
+  for (const c of ["anime", "game", "movie"]) {
+    const n = catList.filter((x) => x === c).length;
+    if (n < 2) fail(`G03 的 ${c} 题库只有 ${n} 道，抽不出 2 道`);
+  }
+  // §5.2 / §5.4 / §5.5 的机制得真的在代码里
+  if (!/BUZZ_MS\s*=\s*2200/.test(wg)) fail("G03 抢答窗不是 2.2 秒（BUZZ_MS）");
+  if (wg.indexOf("wordRuns") < 0 || wg.indexOf("function pickQuestions(") < 0) {
+    fail("G03 没有按游玩次抽题（D.store.wordRuns / pickQuestions）");
+  }
+  if (wg.indexOf("learnedCats") < 0) fail("G03「换你出题」第二轮没有记下她俩猜错过的词（learnedCats）");
+  const maskBlock = wg.slice(wg.indexOf("const WGMask ="), wg.indexOf("const QUESTIONS = ["));
+  for (const fn of ["function render(", "function clear(", "function cellFor(",
+                    "function prepare(", "function animate("]) {
+    if (maskBlock.indexOf(fn) < 0) fail(`G03 的 WGMask 缺少 ${fn}`);
+  }
+  if (maskBlock.indexOf("applyMask") < 0) fail("G03 的 WGMask 没有蒙版这一层（applyMask）");
+  const htmlWg = read("daily.html");
+  for (const id of ["wgSilCv", "wgBuzz", "wgPick"]) {
+    if (htmlWg.indexOf('id="' + id + '"') < 0) fail(`daily.html 缺少 #${id}（剪影 canvas / 抢答窗 / 类别选择）`);
+  }
+  const cssWg = read("daily.css");
+  if (!/#wgSilCv\s*\{/.test(cssWg)) fail("daily.css 没有 #wgSilCv 的尺寸样式");
+  if (!/#wgSil\s*\{[^}]*display:\s*none/.test(cssWg)) {
+    fail("#wgSil 还在直接显示，它只该做 PNG 加载中转");
+  }
+
   // 1.4 场景连线必须对称，不然会走进死路（两个探索型小游戏都要查）
   const er = read("errand.js");
   const se = read("search.js");
@@ -195,6 +272,34 @@ function checkStatic() {
   const cssTags = read("daily.css");
   if (cssTags.indexOf(".er-tags") < 0) fail("daily.css 没有换人条样式 .er-tags");
 
+  // 1.4c G01 §3：重玩参数种子化 + 站位联动 + 抬箱走一段路。
+  //      首通（游玩次 0）必须还是现行参数：材料 [2,3,1]、虚线框 y=88、
+  //      推箱不镜像。重玩才洗牌，而且材料顺序不会和上一次一样。
+  if (!/function planForRun\(/.test(er)) fail("G01 没有 planForRun()（本场第几次游玩 → 参数组）");
+  if (!/function makeRnd\(/.test(er)) fail("G01 没有种子伪随机 makeRnd()");
+  if (er.indexOf("D.games.errand.planForRun") < 0) fail("G01 没把 planForRun 暴露给自检");
+  if (!/order:\s*\[2,\s*3,\s*1\]/.test(er)) fail("G01 首通材料顺序不是现行的 [2,3,1]");
+  if (!/cys:\s*\[88,\s*76,\s*100\]/.test(er)) fail("G01 虚线框没有 3 个候选位（88/76/100）");
+  if (er.indexOf("const BOX_MIRROR") < 0) fail("G01 没有镜像推箱路线 BOX_MIRROR");
+  for (const k of ["errandRuns", "noticeLinkOn", "notice.jx", "carry.swayScale"]) {
+    if (er.indexOf(k) < 0) fail(`G01 缺少联动 / 游玩次相关的「${k}」`);
+  }
+  for (const k of ["const WALK", "beginCarryWalk", "updateCarryWalk", "carry.bumps",
+                   "carry.walkOn", "carry.lane", "carry.bumpedNpc"]) {
+    if (er.indexOf(k) < 0) fail(`G01 抬箱走路那一段缺少「${k}」`);
+  }
+  // 碰到路人只是停一下，不记做错重来：走路段里不许出现 misses++
+  {
+    const walkBlock = er.slice(er.indexOf("function updateCarryWalk("),
+                               er.indexOf("function updateCarry("));
+    if (/carry\.misses\+\+/.test(walkBlock)) fail("G01 碰到路人被记成了失误（走路段不该有 misses++）");
+    if (walkBlock.indexOf("carry.bumps++") < 0) fail("G01 走路段没有记录「碰到路人」的停顿");
+  }
+  // 联动只给正反馈：材料全对 / 推箱没回滚时才有加成，条件里不许反过来加难度
+  if (er.indexOf("papers.misses === 0") < 0 || er.indexOf("box.misses === 0 ? 0.7 : 1") < 0) {
+    fail("G01 的联动条件不是「全对 / 没回滚才加成」");
+  }
+
   // 1.5 文案红线：不许出现好感度 / 提前点名「她喜欢谁」
   //     先把注释剥掉——代码里写着「不要存她有多喜欢你」这种注释是正常的
   const stripComments = (src) => src
@@ -225,22 +330,70 @@ function checkStatic() {
   const points = (pBlock.match(/\bid:\s*"/g) || []).length;
   if (points < 6 || points > 8) fail(`G02 有 ${points} 个可看的东西，设计稿要求 6–8 个`);
 
-  // 1.7b G02 解谜：平面图上的地点、答案路线、每条线索钉在哪儿
-  const spotBlock = se.slice(se.indexOf("const SPOTS = {"), se.indexOf("const ROUTE ="));
+  // 1.7b G02 解谜：平面图上的地点、每轮候选路线、每条线索钉在哪儿
+  const spotBlock = se.slice(se.indexOf("const SPOTS = {"), se.indexOf("const FIRST_ROUTE ="));
   const spotIds = [...spotBlock.matchAll(/^\s{4}(\w+):\s*\{/gm)].map((m) => m[1]);
   if (spotIds.length < 6) fail(`G02 平面图只有 ${spotIds.length} 个地点，至少要 6 个`);
-  const routeM = se.match(/const ROUTE = \[([^\]]+)\]/);
-  const route = routeM ? routeM[1].split(",").map((s) => s.trim().replace(/^"|"$/g, "")) : [];
-  if (route.length !== 3) fail(`G02 答案路线有 ${route.length} 站，应该是 3 站`);
-  route.forEach((id) => {
-    if (spotIds.indexOf(id) < 0) fail(`G02 答案路线里的「${id}」不在 SPOTS 里`);
+  // §4.1 四个候选落点：每个落点一条三站路线，路线里的地点都得在 SPOTS 里
+  const spotDataBlock = se.slice(se.indexOf("const CARD_SPOTS = ["), se.indexOf("const SPOT_TEXT ="));
+  if (!spotDataBlock) fail("G02 没有 CARD_SPOTS 候选落点表");
+  const spotIdMs = [...spotDataBlock.matchAll(/id:\s*"(\w+)",\s*name:/g)].map((m) => m[1]);
+  if (spotIdMs.length !== 4) fail(`G02 有 ${spotIdMs.length} 个候选落点，设计稿要求 4 个`);
+  const routeMs = [...spotDataBlock.matchAll(/route:\s*\[([^\]]+)\]/g)].map((m) =>
+    m[1].split(",").map((s) => s.trim().replace(/^"|"$/g, "")));
+  if (routeMs.length !== 4) fail(`G02 候选落点里有 ${routeMs.length} 条路线，应该 4 条`);
+  routeMs.forEach((r, i) => {
+    if (r.length !== 3) fail(`G02 第 ${i + 1} 个落点的路线有 ${r.length} 站，应该是 3 站`);
+    r.forEach((id) => {
+      if (spotIds.indexOf(id) < 0) fail(`G02 第 ${i + 1} 个落点路线里的「${id}」不在 SPOTS 里`);
+    });
   });
+  const route = routeMs[0] || [];          // 首通（游玩次 0）走的就是这一条
+  if (route.length !== 3) fail(`G02 首通答案路线有 ${route.length} 站，应该是 3 站`);
+  const tpMs = [...spotDataBlock.matchAll(/truePoints:\s*\[([^\]]*)\]/g)].map((m) =>
+    m[1].split(",").map((s) => s.trim()).filter(Boolean));
+  if (tpMs.length !== 4) fail(`G02 只有 ${tpMs.length} 个落点标了「哪四处产真线索」，应该 4 个`);
+  tpMs.forEach((a, i) => {
+    if (a.length !== 4) fail(`G02 第 ${i + 1} 个落点的真线索点有 ${a.length} 个，应该是 4 个`);
+  });
+  for (const k of ['dest:', 'variants:', 'answers:', 'confirms:', 'hint3:']) {
+    const n = spotDataBlock.split(k).length - 1;
+    if (n < 4) fail(`G02 候选落点的「${k}」只写了 ${n} 处，四个落点都要有`);
+  }
+  const orderM = se.match(/const SPOT_ORDER = \[([^\]]+)\]/);
+  const spotOrder = orderM ? orderM[1].split(",").map((s) => Number(s.trim())) : [];
+  if (spotOrder.length !== 4) fail("G02 没有 4 个落点的轮换顺序 SPOT_ORDER");
+  else if (spotOrder[0] !== 0) fail("G02 首通没轮到楼梯口窗台（SPOT_ORDER[0] 应该是 0）");
+  // §4.2 问人：每人 3 个问题、ask 是第四类线索，关键问题能换印证版
+  const askBlock = se.slice(se.indexOf("const ASK = {"), se.indexOf("const ASK_NAME"));
+  const askCounts = ["girl", "friend"].map((who) => {
+    const m = askBlock.match(new RegExp(who + ":\\s*\\[([\\s\\S]*?)\\]"));
+    return m ? (m[1].match(/"/g) || []).length / 2 : 0;
+  });
+  askCounts.forEach((n, i) => {
+    if (n !== 3) fail(`G02 问人：${i === 0 ? "朱里" : "由乃"}有 ${n} 个问题，应该是 3 个`);
+  });
+  if (se.indexOf('kind: "ask"') < 0) fail("G02 没有第四类线索 kind: \"ask\"");
+  for (const k of ["function askQuestion(", "function renderAsk(", "function openAsk(",
+                   "function applyConfirm(", "round.confirms", "askBox", "searchRuns",
+                   "function makeRnd(", "function spotIndexForRun(",
+                   "function roundInfo(", "function stepVerdict(", "D.games.search.roundInfo"]) {
+    if (se.indexOf(k) < 0) fail(`G02 缺少问人 / 候选落点 / 步数相关的「${k}」`);
+  }
+  if (se.indexOf("steps += 1") < 0) fail("G02 没有记录跨场景步数");
+  // §4.3 收尾评价只改措辞：stepVerdict 的两句口径必须都在，且不进存档
+  if (se.indexOf("你心里有谱") < 0 || se.indexOf("腿都跑细了") < 0) {
+    fail("G02 收尾缺少「少步数 / 多步数」两种评价口径");
+  }
+  const closeBlock = se.slice(se.indexOf("function closing()"), se.indexOf("// ---------------------------------------------------------------- 换场景"));
+  if (closeBlock.indexOf("stepVerdict(steps)") < 0) fail("G02 收尾没有按步数加评价");
+  if (/D\.persist\([^)]*steps/.test(se)) fail("G02 把步数写进了存档（只该影响措辞）");
   const pins = [...se.matchAll(/pin:\s*"(\w+)"/g)].map((m) => m[1]);
   if (pins.length < 6) fail(`G02 只有 ${pins.length} 条线索标了地点，地图上没得钉`);
   pins.forEach((id) => {
     if (spotIds.indexOf(id) < 0) fail(`G02 有线索钉到了不存在的地点「${id}」`);
   });
-  // 「我猜的」那条必须指向答案之外，不然去掉它路线也不会变
+  // 首通那条「我猜的」必须指向首通路线之外，不然去掉它路线也不会变
   const gAt = se.indexOf('kind: "guess"');
   const gPin = gAt < 0 ? null : (se.slice(gAt, gAt + 260).match(/pin:\s*"(\w+)"/) || [])[1];
   if (!gPin) fail("G02「我猜的」那条线索没有属地，谜题的核心就没了");
@@ -303,7 +456,10 @@ function checkStatic() {
   if (bg.indexOf("function updateAiSteal(") < 0) fail("G04 的电脑抢断没有抬手判定");
   if (!/aiStealWindup:\s*0\.\d+/.test(bg)) fail("G04 的电脑抢断没有抬手时间");
   if (!/aiStealRange:\s*\d+/.test(bg)) fail("G04 的电脑抢断没有距离上限");
-  if (!/place\("me",\s*0\.50,\s*0\.40/.test(bg)) fail("G04 玩家开球的站位没有退开");
+  // §6.4 开球改成有纵深的阵型：中路不再是一条空道
+  if (!/place\("me",\s*0\.50,\s*0\.30/.test(bg)) fail("G04 玩家开球的站位不是新的纵深阵型（0.50, 0.30）");
+  if (!/place\("yuno",\s*0\.56,\s*0\.55/.test(bg)) fail("G04 开球时由乃不在上抢位（0.56, 0.55）");
+  if (!/place\("jurie",\s*0\.44,\s*0\.80/.test(bg)) fail("G04 开球时朱里不在守线位（0.44, 0.80）");
   // 抢断圈：靠近持球人后开圈，护上/护下，玩家用 W / S 打另一边
   for (const fn of ["startDuel", "resolveDuel", "updateDuel"]) {
     if (bg.indexOf("function " + fn + "(") < 0) fail(`G04 缺少抢断圈的 ${fn}()`);
@@ -318,6 +474,57 @@ function checkStatic() {
   if (bg.indexOf("scoreThem >= 2") < 0) fail("G04 由乃赢到两球后没有改给朱里做球");
   if (bg.indexOf('passTo("jurie"') < 0) fail("G04 朱里没有接球/做球的路线");
   if (bg.indexOf("airKicks") < 0) fail("G04 朱里没有「踢空」这条反馈");
+  // 1.9b §6 改造：防守分工、守门、触球、开球保护、射门三把锁、比分起伏。
+  //       这些参数是设计文档第六节逐项落位的，缺一个对应的手感就不成立。
+  for (const k of ["roleHysteresis", "pressLead", "pressLeadAhead", "coverDepth",
+                   "keeperTriggerD", "keeperLag", "keeperErr", "keeperErrLead",
+                   "keeperReach", "keeperLowZ", "keeperBiasTrail",
+                   "touchFollow", "turnSlip", "dashDepth", "dashCd",
+                   "kickoffProtect", "spreadBase", "spreadPower", "spreadPressure",
+                   "pressureRange", "postTol"]) {
+    if (bg.indexOf(k + ":") < 0) fail(`G04 §6 缺少参数 ${k}`);
+  }
+  if (!/dribbleSpeed:\s*0\.78\b/.test(bg)) fail("G04 §6.3 带球速度系数不是 0.78");
+  if (!/pressLead:\s*0\.35\b/.test(bg) || !/pressLeadAhead:\s*0\.45\b/.test(bg)) {
+    fail("G04 §6.1/6.6 上抢提前量不是 0.35 / 领先时 0.45");
+  }
+  if (!/keeperLag:\s*0\.12\b/.test(bg) || !/keeperReach:\s*0\.11\b/.test(bg)) {
+    fail("G04 §6.2 守门的反应延迟 / 扑程不是 120ms / 0.11");
+  }
+  if (!/postTol:\s*0\.008\b/.test(bg)) fail("G04 §6.5 门柱判定不是 0.008");
+  if (!/goalX:\s*\[0\.355,\s*0\.645\]/.test(bg)) fail("G04 的球门宽度被改了（不做清单：不缩小球门）");
+  for (const fn of ["updateRoles", "pressSpot", "coverSpot", "updateKeeperAI",
+                    "keeperInfo", "updateTouch", "tryDash",
+                    "spreadLanding", "shotSpread", "drawSpreadFan"]) {
+    if (bg.indexOf("function " + fn + "(") < 0) fail(`G04 §6 缺少 ${fn}()`);
+  }
+  if (bg.indexOf("roles.press") < 0 || bg.indexOf("roles.cover") < 0) {
+    fail("G04 §6.1 没有把上抢 / 守线分工写进 roles");
+  }
+  if (bg.indexOf("keeperOn") < 0 || bg.indexOf("keeperLunge") < 0) fail("G04 §6.2 没有守门状态与横扑");
+  // giveBall 得区分来源：只有抢断才有 2.2/2.4 秒保护，开球只留 0.6 秒
+  if (!/function giveBall\(who,\s*src\)/.test(bg)) fail("G04 §6.4 giveBall 没有来源参数");
+  for (const w of ['from === "steal"', 'from === "kickoff"', "CFG.kickoffProtect"]) {
+    if (bg.indexOf(w) < 0) fail(`G04 §6.4 开球 / 抢断保护没有按来源区分（缺 ${w}）`);
+  }
+  if (bg.indexOf('goalSide === "me" ? "yuno" : "me"') < 0) {
+    fail("G04 §6.4 进球后没有让失球方开球");
+  }
+  // §6.8 确定性自检入口：固定步进、无渲染，正常对战仍走 rAF
+  for (const w of ["window.__ball", "testRoute", "testKeeper", "testTouch", "testDash",
+                   "testSpread", "testScore", "simMode", "simSnap"]) {
+    if (bg.indexOf(w) < 0) fail(`G04 §6.8 缺少确定性测试入口 ${w}`);
+  }
+  // 不做清单：act5 不加失败态
+  if (/gameOver|Game Over|YOU LOSE/.test(bg)) fail("G04 加了失败态");
+  // §6.6 比分起伏是隐性平衡：不许出现提示文本（注释里说明设计意图不算）
+  {
+    const bgCode = stripComments(bg);
+    if (bgCode.indexOf("领先") >= 0 || bgCode.indexOf("落后") >= 0) {
+      fail("G04 把「领先 / 落后」写进了场上文本，隐性平衡不该说破");
+    }
+  }
+
   // 比分不许写进存档，也不许漏进结果卡
   const persists = [...bg.matchAll(/D\.persist\(([^)]*)\)/g)].map((m) => m[1]);
   if (!persists.length) fail("G04 结束时没有写 ballGameCompleted");
@@ -713,6 +920,30 @@ async function runErrand(page) {
     fail(`目标卡标题应该提「分头」，实际「${s.objTitle}」`);
   }
   if (!s.obj || s.obj.indexOf("还剩") < 0) fail(`目标卡应该列出还没做完的事，实际「${s.obj}」`);
+
+  // §3.1 首通（游玩次 0）恒定用现行参数：材料 [2,3,1]、虚线框 y=88、不镜像。
+  //      重玩才按「本场第几次游玩」洗牌，材料顺序不会连着两次一样。
+  const plans = await page.evaluate(() => [0, 1, 2, 3, 4, 5].map((n) => {
+    const p = window.DAILY.games.errand.planForRun(n);
+    return { n: p.n, order: p.papersOrder, cy: p.noticeCy, band: p.noticeBand, mirror: p.mirror, box: p.box };
+  }));
+  if (plans[0].order.join("") !== "231") fail("G01 首通计划里的材料顺序不是 [2,3,1]: " + plans[0].order);
+  if (plans[0].cy !== 88) fail("G01 首通计划里的虚线框 y 不是 88");
+  if (Math.abs(plans[0].band[0] - 0.7083) > 0.002) fail("G01 首通计划里的判定区间变了");
+  if (plans[0].mirror) fail("G01 首通计划里推箱镜像了");
+  if (plans[0].box.start !== 418 || plans[0].box.thr !== 438) fail("G01 首通计划里的箱子参数变了");
+  for (let i = 1; i < plans.length; i++) {
+    if (plans[i].order.join("") === plans[i - 1].order.join("")) {
+      fail(`G01 第 ${i} 次重玩的材料顺序和上一次一样：${plans[i].order}`);
+    }
+    if ((i === 1 || i === 2) && plans[i].cy === 88) fail(`G01 第 ${i} 次重玩的虚线框还在首通位置`);
+  }
+  if (!plans[1].mirror || plans[1].box.start !== 94 || plans[1].box.thr !== 74) {
+    fail("G01 第 1 次重玩没有镜像出「左侧楼梯口」路线");
+  }
+  const runNow = await page.evaluate(() => window.__daily.current.run);
+  if (!runNow || runNow.n !== 0) fail(`G01 首通 run.n 不是 0：${runNow && runNow.n}`);
+  if (runNow && runNow.mirror) fail("G01 首通运行时推箱镜像了");
   const tags = await page.evaluate(() => {
     const el = document.getElementById("erTags");
     const on = el.querySelector("button.on");
@@ -785,6 +1016,17 @@ async function runErrand(page) {
   await page.waitForTimeout(350);
   s = await S(page);
   if (!s.noticeDone) fail("在虚线框里松手却没有贴好");
+  // §3.2 由乃还没数材料 → 朱里这边不联动：抖动倍率 1，也没有「有人扶着」的短反应。
+  const linkBase = await page.evaluate(() => ({
+    link: window.__daily.current.noticeLink,
+    jitter: window.__daily.current.noticeJitterScale,
+    react: (window.__reactLog || []).slice()
+  }));
+  if (linkBase.link) fail("由乃还没数材料，贴通知却联动上了");
+  if (linkBase.jitter !== 1) fail(`没联动时抖动倍率应该是 1，实际 ${linkBase.jitter}`);
+  if (linkBase.react.some((x) => x.indexOf("有人扶着") >= 0)) {
+    fail("由乃还没做，却出现了「有人扶着」的联动台词");
+  }
   await page.screenshot({ path: path.join(OUT, "d3b-notice.png") });
 
   // ---- 由乃：先拿错一摞（顺序回到第一摞），再按纸上的号拿
@@ -896,6 +1138,10 @@ async function runErrand(page) {
   else {
     if (s.carry.lift > 0.01) fail(`刚围到箱子边，箱子就被抬起来了（lift ${s.carry.lift}）`);
     if (s.carry.misses !== 0) fail(`还没开始抬就记了 ${s.carry.misses} 次歪倒`);
+    // §3.2 推箱全程回滚过一次 → 抬箱段不联动，晃动保持原力度
+    if (s.carry.swayScale !== 1) {
+      fail(`推箱回过滚，抬箱 swayScale 应该是 1（不加难也不减），实际 ${s.carry.swayScale}`);
+    }
   }
   await page.screenshot({ path: path.join(OUT, "d5d-carry.png") });
 
@@ -980,14 +1226,67 @@ async function runErrand(page) {
   }
   await page.screenshot({ path: path.join(OUT, "d5f-carry-done.png") });
 
-  await page.waitForFunction(() => window.DAILY.dialogOpen(), null, { timeout: 12000 }).catch(() => {});
+  // §3.3 抬起来之后还要往楼梯口走约 120px：路上迎面一个路人，
+  //      玩家用 W / S 换纵深线让开；碰到只是停一下，不失败。
+  const walkA = await page.evaluate(() => {
+    const g = window.__daily.current;
+    const c = g.carry;
+    return { walkOn: c.walkOn, walkDir: c.walkDir, walkFrom: c.walkFrom, walkTo: c.walkTo,
+             lane: c.lane, bumps: c.bumps, misses: c.misses, boxX: g.boxX };
+  });
+  if (!walkA.walkOn) fail("G01 抬起来之后没有进入「往楼梯口走」那一段");
+  if (walkA.walkDir !== 1) fail(`G01 首通向楼梯口的方向应该是 +1，实际 ${walkA.walkDir}`);
+  if (Math.abs(walkA.lane - 238) > 1) fail(`G01 走路段的起始纵深线不是 238（${walkA.lane}）`);
+  if (Math.abs((walkA.walkTo - walkA.walkFrom) - 120) > 2) fail("G01 走路段的目标距离不是约 120px");
+  const liftX = walkA.walkFrom;
+  // 碰到迎面路人只停一下：bumps 记一次，misses 不动
+  await page.waitForFunction(() => {
+    const g = window.__daily.current;
+    return !!g && g.carry && g.carry.bumps >= 1;
+  }, null, { timeout: 12000 }).catch(() => {});
+  let walkB = await page.evaluate(() => {
+    const g = window.__daily.current;
+    const c = g.carry;
+    return { walkOn: c.walkOn, lane: c.lane, bumps: c.bumps, misses: c.misses };
+  });
+  if (walkB.bumps < 1) fail("G01 走路段一路没碰到迎面路人");
+  if (walkB.misses !== walkA.misses) fail(`G01 碰到路人被记成了失误（misses ${walkA.misses} → ${walkB.misses}）`);
+  await page.screenshot({ path: path.join(OUT, "d5g-walk-bump.png") });
+  // W / S 微调纵深：按 W 站远一点让开
+  const lane0 = walkB.lane;
+  await page.keyboard.down("KeyW");
+  await page.waitForTimeout(600);
+  await page.keyboard.up("KeyW");
+  walkB = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return { lane: g.carry.lane };
+  });
+  if (!(walkB.lane < lane0 - 6)) fail(`G01 按 W 没有把纵深线往远处挪（${lane0} → ${walkB.lane}）`);
+  await page.waitForFunction(() => {
+    const g = window.__daily.current;
+    return !!g && g.carry && !g.carry.walkOn;
+  }, null, { timeout: 16000 }).catch(() => {});
+  const walkC = await page.evaluate(() => {
+    const g = window.__daily.current;
+    const c = g.carry;
+    return { walkOn: c.walkOn, boxX: g.boxX, misses: c.misses, bumps: c.bumps };
+  });
+  if (walkC.walkOn) fail("G01 走路段没有走到终点");
+  if (Math.abs(walkC.boxX - (liftX + 120)) > 2) {
+    fail(`G01 走路段终点不是约 120px（${liftX} → ${walkC.boxX}）`);
+  }
+  if (walkC.misses !== walkA.misses) fail(`G01 走路段结束时不该多出失误（misses ${walkA.misses} → ${walkC.misses}）`);
+  await page.screenshot({ path: path.join(OUT, "d5h-walk-end.png") });
+
+  await page.waitForFunction(() => window.DAILY.dialogOpen(), null, { timeout: 20000 }).catch(() => {});
   s = await S(page);
   if (!s.dlg) fail("一起把箱子抬起来之后没有进入结尾对白");
   if (s.state !== "handover") fail(`结尾对白时状态是 ${s.state}，应该是 handover`);
   if (s.girl == null || s.fr == null) fail("结尾读不到朱里和由乃的位置");
   else {
-    if (Math.abs(s.girl - boxX) > 60) fail(`朱里没有走到箱子边（${s.girl} vs ${boxX}）`);
-    if (Math.abs(s.fr - boxX) > 60) fail(`由乃没有走到箱子边（${s.fr} vs ${boxX}）`);
+    // 抬箱走了 120px，三个人是跟着箱子一起走的：用走完之后的箱子位置比。
+    if (Math.abs(s.girl - s.boxX) > 60) fail(`朱里没有跟着走到箱子边（${s.girl} vs ${s.boxX}）`);
+    if (Math.abs(s.fr - s.boxX) > 60) fail(`由乃没有跟着走到箱子边（${s.fr} vs ${s.boxX}）`);
   }
   const tagsEnd = await page.evaluate(() => document.getElementById("erTags").hidden);
   if (!tagsEnd) fail("结尾了换人条还挂着");
@@ -1012,6 +1311,188 @@ async function runErrand(page) {
   if (!done.hub) fail("搬完箱子没有回到目录");
   if (!done.saved) fail("搬完箱子没有存下 errandCompleted");
   if (done.cur) fail("搬完箱子之后小游戏还没释放");
+
+  // ================= 重玩一遍（§3.1 参数种子化 + §3.2 联动正反馈） =================
+  // 首通已经存下 errandRuns=1，再进一次就是第 2 次游玩：材料洗牌、虚线框换位、
+  // 推箱镜像到左侧楼梯口。这一遍三个人一次做对，验「只给正反馈」的联动加成。
+  await page.click('#hubList li[data-id="errand"]');
+  await page.waitForTimeout(1000);
+  await advanceAll(page);
+  await page.waitForTimeout(1500);
+  await advanceAll(page);
+  await page.waitForTimeout(500);
+  let r = await S(page);
+  if (r.state !== "work") fail(`G01 重玩时状态是 ${r.state}，应该是 work`);
+  const plan1 = await page.evaluate(() => {
+    const p = window.DAILY.games.errand.planForRun(1);
+    return { order: p.papersOrder, band: p.noticeBand, mirror: p.mirror, box: p.box };
+  });
+  r = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return {
+      run: g.run, paperOrder: g.paperOrder, noticeBand: g.noticeBand,
+      boxX: g.boxX, boxDrop: g.boxDrop, boxThr: g.boxThr, boy: g.trio.boy.x
+    };
+  });
+  if (!r.run || r.run.n !== 1) fail(`G01 重玩 run.n 不是 1：${r.run && r.run.n}`);
+  const replayOrder = (r.paperOrder || []);
+  if (replayOrder.join("") === "231") fail("G01 重玩材料顺序还是首通那三摞");
+  if (replayOrder.join("") !== plan1.order.join("")) fail("G01 重玩材料顺序和计划对不上");
+  if (!r.run.mirror) fail("G01 重玩没有镜像推箱路线");
+  if (Math.abs(r.boxX - plan1.box.start) > 1) fail(`G01 镜像路线箱子起点不对（${r.boxX}）`);
+  if (Math.abs(r.boxThr - plan1.box.thr) > 1) fail(`G01 镜像路线门槛点没跟着镜像（${r.boxThr}）`);
+  if (Math.abs(r.boxDrop[0] - plan1.box.drop[0]) > 1) fail("G01 镜像路线落点没跟着镜像");
+  if (Math.abs(r.noticeBand[0] - plan1.band[0]) > 0.002) fail("G01 重玩虚线框没换位");
+  if (Math.abs(r.boy - 120) > 1) fail(`G01 镜像时「我」的站位没跟着换边（${r.boy}）`);
+  await page.screenshot({ path: path.join(OUT, "d7-replay-start.png") });
+
+  // 由乃：一次不拿错（材料全对 → 后面朱里那边会联动）
+  await page.click('#erTags button[data-who="friend"]');
+  await page.waitForTimeout(150);
+  const stackPoint2 = (i) => page.evaluate((idx) => {
+    const g = window.__daily.current;
+    const rc = document.getElementById("scene").getBoundingClientRect();
+    return { x: rc.left + g.paperXs[idx] / 512 * rc.width, y: rc.top + g.paperY / 288 * rc.height };
+  }, i);
+  for (let n = 1; n <= 3; n++) {
+    const pp = await stackPoint2(r.paperOrder.indexOf(n));
+    await page.mouse.click(pp.x, pp.y);
+    await page.waitForTimeout(230);
+  }
+  let rr = await page.evaluate(() => ({
+    done: window.__daily.current.paperDone, misses: window.__daily.current.paperMisses
+  }));
+  if (!rr.done) fail("G01 重玩：按号拿完三摞却没完成");
+  if (rr.misses !== 0) fail(`G01 重玩：这次一次没拿错，paperMisses 却是 ${rr.misses}`);
+
+  // 朱里：材料全对 → rise 抖动减半 + 一句「有人扶着就是不一样」
+  await page.click('#erTags button[data-who="girl"]');
+  await page.waitForTimeout(150);
+  await page.keyboard.down("Space");
+  await page.waitForFunction((lo) => {
+    const g = window.__daily.current;
+    return !!g && g.noticeT >= lo;
+  }, r.noticeBand[0] + 0.03, { timeout: 6000 });
+  rr = await page.evaluate(() => ({
+    link: window.__daily.current.noticeLink,
+    jitter: window.__daily.current.noticeJitterScale
+  }));
+  if (!rr.link) fail("G01 重玩：由乃材料全对，贴通知却没联动");
+  if (rr.jitter !== 0.5) fail(`G01 重玩：联动时抖动倍率应该是 0.5，实际 ${rr.jitter}`);
+  await page.keyboard.up("Space");
+  await page.waitForTimeout(400);
+  rr = await page.evaluate(() => ({ done: window.__daily.current.noticeDone }));
+  if (!rr.done) fail("G01 重玩：在新的虚线框位置松手却没贴好");
+  const replayReacts = await page.evaluate(() => (window.__reactLog || []).slice());
+  if (!replayReacts.some((x) => x.indexOf("有人扶着") >= 0)) {
+    fail("G01 重玩：联动没走现有 #react 条说「有人扶着就是不一样」");
+  }
+  await page.screenshot({ path: path.join(OUT, "d7-replay-link.png") });
+
+  // 我：镜像推箱，一次到位（不回滚）
+  await page.click('#erTags button[data-who="boy"]');
+  await page.waitForTimeout(150);
+  await page.keyboard.down("Space");
+  await page.waitForFunction((lo) => {
+    const g = window.__daily.current;
+    return !!g && g.boxX <= lo;
+  }, plan1.box.thr + 3, { timeout: 6000 });
+  await page.keyboard.up("Space");
+  let bx = await S(page);
+  if (bx.boxX <= bx.boxDrop[1] + 2) fail(`G01 镜像推箱没被门槛挡住（x=${bx.boxX}）`);
+  await page.keyboard.press("KeyE");
+  await page.waitForTimeout(150);
+  await page.keyboard.down("Space");
+  await page.waitForFunction((lo) => {
+    const g = window.__daily.current;
+    return !!g && g.boxX <= lo;
+  }, plan1.box.drop[1] - 2, { timeout: 6000 });
+  await page.keyboard.up("Space");
+  await page.waitForTimeout(420);
+  bx = await page.evaluate(() => ({
+    done: window.__daily.current.boxDone, misses: window.__daily.current.boxMisses
+  }));
+  if (!bx.done) fail("G01 重玩：镜像推到落点松手却没算搬好");
+  if (bx.misses !== 0) fail(`G01 重玩：这次没推过头，boxMisses 却是 ${bx.misses}`);
+
+  // 抬箱：推箱没回滚 → sway ×0.7；抬满之后按 W 让开路人，走到终点
+  await page.waitForFunction(() => {
+    const g = window.__daily.current;
+    return !!g && g.state === "carry";
+  }, null, { timeout: 12000 }).catch(() => {});
+  let rc = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return { state: g.state, carry: g.carry, boxX: g.boxX };
+  });
+  if (rc.state !== "carry") fail(`G01 重玩：没进入抬箱（${rc.state}）`);
+  if (rc.carry.swayScale !== 0.7) {
+    fail(`G01 重玩：推箱没回滚，抬箱 swayScale 应该是 0.7，实际 ${rc.carry.swayScale}`);
+  }
+  await page.keyboard.down("Space");
+  let rHoldA = false, rHoldD = false;
+  const rT0 = Date.now();
+  while (Date.now() - rT0 < 12000) {
+    const c = await page.evaluate(() => window.__daily.current.carry);
+    if (!c || c.done) break;
+    const wantA = c.tilt > 0.06, wantD = c.tilt < -0.06;
+    if (wantA !== rHoldA) { rHoldA = wantA; await page.keyboard[wantA ? "down" : "up"]("KeyA"); }
+    if (wantD !== rHoldD) { rHoldD = wantD; await page.keyboard[wantD ? "down" : "up"]("KeyD"); }
+    await page.waitForTimeout(50);
+  }
+  if (rHoldA) await page.keyboard.up("KeyA");
+  if (rHoldD) await page.keyboard.up("KeyD");
+  rc = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return { done: g.carry.done, walkOn: g.carry.walkOn, walkDir: g.carry.walkDir,
+             boxX: g.boxX, walkTo: g.carry.walkTo, walkFrom: g.carry.walkFrom };
+  });
+  if (!rc.done || !rc.walkOn) fail("G01 重玩：抬满之后没进入走路段");
+  if (rc.walkDir !== -1) fail(`G01 重玩：镜像路线应该往左走，实际 ${rc.walkDir}`);
+  const rLiftX = rc.walkFrom;
+  // 一上来就按 W 让开，应该一次都撞不到
+  await page.keyboard.down("KeyW");
+  await page.waitForTimeout(500);
+  await page.keyboard.up("KeyW");
+  await page.waitForFunction(() => {
+    const g = window.__daily.current;
+    return !!g && g.carry && !g.carry.walkOn;
+  }, null, { timeout: 16000 }).catch(() => {});
+  rc = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return { walkOn: g.carry.walkOn, boxX: g.boxX, bumps: g.carry.bumps, misses: g.carry.misses };
+  });
+  await page.keyboard.up("Space");
+  if (rc.walkOn) fail("G01 重玩：镜像走路段没到终点");
+  if (Math.abs(rc.boxX - (rLiftX - 120)) > 3) {
+    fail(`G01 重玩：镜像走路段终点不是约 -120px（${rLiftX} → ${rc.boxX}）`);
+  }
+  if (rc.bumps !== 0) fail(`G01 重玩：提前让开了还是撞到路人（bumps ${rc.bumps}）`);
+  await page.screenshot({ path: path.join(OUT, "d7-replay-walk.png") });
+
+  await page.waitForFunction(() => window.DAILY.dialogOpen(), null, { timeout: 20000 }).catch(() => {});
+  const rEnd = await page.evaluate(() => ({
+    dlg: window.DAILY.dialogOpen(), state: window.__daily.current.state
+  }));
+  if (!rEnd.dlg || rEnd.state !== "handover") fail(`G01 重玩：收尾没进 handover 对白（${rEnd.state}）`);
+  const rT = Date.now();
+  while (Date.now() - rT < 15000) {
+    const st = await page.evaluate(() => ({
+      dlg: window.DAILY.dialogOpen(),
+      hub: document.getElementById("hub").classList.contains("show")
+    }));
+    if (st.hub) break;
+    if (st.dlg) await page.keyboard.press("KeyE");
+    await page.waitForTimeout(120);
+  }
+  const rDone = await page.evaluate(() => ({
+    hub: document.getElementById("hub").classList.contains("show"),
+    runs: window.__daily.store().errandRuns,
+    saved: window.__daily.store().errandCompleted === true
+  }));
+  if (!rDone.hub) fail("G01 重玩：结束没回目录");
+  if (rDone.runs !== 2) fail(`G01 重玩：errandRuns 应该是 2，实际 ${rDone.runs}`);
+  if (!rDone.saved) fail("G01 重玩：errandCompleted 没保留");
+  ok("G01 重玩：参数种子化（材料/框位/镜像路线）与联动加成（通知更稳、抬箱 sway×0.7）都生效");
   return done;
 }
 
@@ -1102,145 +1583,567 @@ async function runSolo(page, id, want) {
   ok(`${id}：双轴走位、走近说话、选择与存档都成立`);
 }
 
+/** G03《课间猜人物》§5：程序化蒙版扩题 + 抢答窗 + 自选线索类别 + 两轮出题 + 抽题。
+ *
+ *  旧流程（固定 9 题、逐题点 data-ans、一次「换你出题」）已经整体作废，这里按新机制重写：
+ *    - 抽题：6 题、每类 2 题、不重复、和「游玩次」种子算出来的一致；
+ *    - 蒙版：fig 题同一种子渲染两次像素哈希一致、格长 16/10/5/0 单调递减、老 PNG 也画在 canvas 上；
+ *    - 抢答：窗内答对满分；窗过她俩按线索类别先猜，玩家再答半分；「再给点提示」只算半拍；
+ *    - 类别：第二条线索前让玩家挑「先听哪类」，选中的类别先展开；
+ *    - 两轮出题：第二轮排除上一轮出过的词和猜错的词，同样的误导只让她们犹豫半拍。
+ *  分数只影响收尾措辞，存档仍是 wordGameCompleted / wordGameCorrect / wordGameHints 三个旧字段。
+ */
 async function runWord(page) {
+  const clickSel = (sel) => page.evaluate((s) => {
+    const e = document.querySelector(s);
+    if (!e) return false;
+    e.click();
+    return true;
+  }, sel);
+  const skipSay = async () => {
+    await page.evaluate(() => {
+      const h = document.getElementById("wgHost");
+      if (h) h.click();
+      const s = document.getElementById("wgSay");
+      if (s) s.click();
+    });
+    await page.waitForTimeout(110);
+  };
+  const waitRound = async (i, ms = 45000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      const st = await page.evaluate(() => {
+        const g = window.__daily.current;
+        return {
+          ri: g && g.roundIndex, state: g && g.state,
+          wg: !document.getElementById("wg").hidden,
+          hub: document.getElementById("hub").classList.contains("show")
+        };
+      });
+      if (!st || st.hub) return false;
+      if (st.ri === i && st.state === "ask") return true;
+      await skipSay();
+    }
+    return false;
+  };
+  const skipSaysUntil = async (pred, ms = 15000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      if (await page.evaluate(pred)) return true;
+      await skipSay();
+    }
+    return await page.evaluate(pred);
+  };
+  /** 跳过她俩的猜测 / 类别选择，直到重新开抢答窗。返回过程中是否出现过类别选择。 */
+  const advanceToBuzz = async (ms = 25000) => {
+    const t0 = Date.now();
+    let sawPick = false;
+    while (Date.now() - t0 < ms) {
+      const st = await page.evaluate(() => {
+        const g = window.__daily.current;
+        return {
+          pick: !document.getElementById("wgPick").hidden,
+          buzz: !!(g && g.buzzActive),
+          wg: !document.getElementById("wg").hidden,
+          swap: !document.getElementById("wgSwap").hidden
+        };
+      });
+      if (st.pick) {
+        sawPick = true;
+        await clickSel("#wgPick button");
+        await page.waitForTimeout(180);
+        continue;
+      }
+      if (st.buzz) return { ok: true, sawPick: sawPick };
+      if (!st.wg || st.swap) return { ok: false, sawPick: sawPick };
+      await skipSay();
+    }
+    return { ok: false, sawPick: sawPick };
+  };
+
+  const runsBefore = await page.evaluate(() => window.__daily.store().wordRuns || 0);
   await page.click('#hubList li[data-id="word"]');
   await page.waitForFunction(() => !document.getElementById("wg").hidden, null, { timeout: 15000 });
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(300);
 
   const panel = await page.evaluate(() => ({
     open: !document.getElementById("wg").hidden,
     chips: document.querySelectorAll("#wg .chip").length,
-    round: document.getElementById("wgRound").textContent
+    canvas: !!document.getElementById("wgSilCv"),
+    buzz: !!document.getElementById("wgBuzz"),
+    pick: !!document.getElementById("wgPick")
   }));
   if (!panel.open) fail("猜词面板没打开");
   if (panel.chips !== 3) fail(`猜词面板上有 ${panel.chips} 个人，应该是 3 个`);
+  if (!panel.canvas) fail("猜词面板没有 #wgSilCv，剪影还挂在 <img> 上");
+  if (!panel.buzz) fail("猜词面板没有抢答窗 #wgBuzz");
+  if (!panel.pick) fail("猜词面板没有线索类别选择 #wgPick");
 
-  // 题数和答案都从页面读：题库换了不用回来改自检，也不会出现
-  // 「硬编码 3 题、游戏其实 6 题」那种假通过。
-  const total = await page.evaluate(() => window.__daily.current.rounds);
-  if (total < 5) fail(`猜词只有 ${total} 回合，流程太短`);
-  let round = 0;
-  for (;;) {
-    // state === "ask" 才是真的轮到玩家，不能只看按钮在不在。
-    // 半场闲聊（state === "chat"）会在这里被跳过，等下一题。
-    await page.waitForFunction(() => {
-      const g = window.__daily.current;
-      return (g && g.state === "ask") ||
-             !document.getElementById("wgSwap").hidden ||
-             document.getElementById("wg").hidden;
-    }, null, { timeout: 30000 });
-    const st = await page.evaluate(() => {
-      const g = window.__daily.current;
-      return {
-        ask: !!g && g.state === "ask",
-        swap: !document.getElementById("wgSwap").hidden,
-        closed: document.getElementById("wg").hidden
-      };
-    });
-    if (!st.ask) break;                       // 进「换你出题」或面板关了
-
-    const opts = await page.evaluate(() => document.querySelectorAll("#wgOpts button").length);
-    if (opts !== 4) fail(`第 ${round + 1} 回合选项 ${opts} 个，应该是 4 个`);
-    if (round === 0) {
-      await page.screenshot({ path: path.join(OUT, "d6-word.png") });
-      await noOverlap(page, "#reactBtn", "#wgInput", "G03");
-      await noOverlap(page, "#reactBtn", "#wgOpts", "G03");
-      await pokeOnce(page, "G03", "word_guess", "pokeCount", "抢答",
-        [["我猜到了，能说了吗"], ["那就说啊"]]);
-      await page.screenshot({ path: path.join(OUT, "d6a-poke.png") });
-    }
-
-    if (round === 1) {
-      const n0 = await page.evaluate(() => document.getElementById("wgClues").children.length);
-      await page.click("#wgHint");
-      await page.waitForTimeout(300);
-      const n1 = await page.evaluate(() => document.getElementById("wgClues").children.length);
-      if (n1 <= n0) fail(`按了提示线索数没变（${n0} → ${n1}）`);
-      await page.screenshot({ path: path.join(OUT, "d7-clue.png") });
-    }
-
-    // 点标了 data-ans 的那个：正确答案每题位置不同，不能再闭眼点第一个
-    await page.click('#wgOpts button[data-ans="1"]');
-    round++;
-    await page.waitForTimeout(1400);
-    if (round > total + 1) fail("猜词回合数超过题库，可能没往下走");
-  }
-  if (round !== total) fail(`猜词只答了 ${round} / ${total} 回合`);
-
-  // 六题之后是「换你出题」。要真的选一次：确认原选项收起来、成绩没变、
-  // 而且它自己会收尾——不是又多出一题让人答。
-  await page.waitForFunction(() => !document.getElementById("wgSwap").hidden,
-    null, { timeout: 14000 }).catch(() => fail("G03 六题之后没有出现「换你出题」"));
-  const swap = await page.evaluate(() => {
+  // ---- §5.5 抽题：6 题、每类 2 题、不重复、可复现 ----
+  const draw = await page.evaluate(() => {
+    const W = window.DAILY.games.wordgame;
     const g = window.__daily.current;
+    const seed = window.DAILY.store.wordRuns;
+    const expected = W.pickQuestions(seed).map((q) => q.id);
+    const meta = g.drawn.map((q) => ({ id: q.id, cat: q.cat, fig: !!q.fig }));
+    const byCat = {};
+    meta.forEach((m) => { byCat[m.cat] = (byCat[m.cat] || 0) + 1; });
+    const qs = W.QUESTIONS;
+    const npcBad = [];
+    let overrides = 0;
+    qs.forEach((q) => {
+      if (!q.npcByClue) return;
+      overrides++;
+      let differs = false;
+      Object.keys(q.npcByClue).forEach((k) => {
+        if (["look", "story", "quote"].indexOf(k) < 0) npcBad.push(q.id + ":k:" + k);
+        if (W.npcGuess(q, k).text !== q.npcByClue[k].text) npcBad.push(q.id + ":wiring:" + k);
+        if (W.npcGuess(q, k).text !== q.npc.text) differs = true;
+      });
+      if (!differs) npcBad.push(q.id + ":override-same-as-default");
+    });
     return {
-      round: document.getElementById("wgRound").textContent,
-      words: document.querySelectorAll("#wgSwapOpts button").length,
-      optsHidden: document.getElementById("wgOpts").hidden,
-      cluesHidden: document.getElementById("wgClues").hidden,
-      correct: g && g.stats.correct,
-      state: g && g.state
+      seed: seed, rounds: g.rounds, meta: meta, expected: expected,
+      byCat: byCat, npcBad: npcBad, overrides: overrides
     };
   });
-  if (swap.round.indexOf("换你出题") < 0) fail(`G03 插曲标题是「${swap.round}」`);
-  if (swap.words !== 3) fail(`G03「换你出题」给了 ${swap.words} 个词，应该是 3 个`);
-  if (!swap.optsHidden || !swap.cluesHidden) fail("G03「换你出题」时原来的题面还挂着");
-  if (swap.correct !== total) fail(`G03 插曲把成绩改成了 ${swap.correct}`);
+  if (draw.seed !== runsBefore + 1) fail(`游玩次种子没有 +1（${runsBefore} → ${draw.seed}）`);
+  if (draw.rounds !== 6) fail(`每轮不是 6 题，是 ${draw.rounds}`);
+  if (draw.meta.length !== 6) fail(`抽到 ${draw.meta.length} 题，应该是 6 题`);
+  if (new Set(draw.meta.map((m) => m.id)).size !== 6) {
+    fail("抽题有重复：" + draw.meta.map((m) => m.id).join(","));
+  }
+  ["anime", "game", "movie"].forEach((c) => {
+    if (draw.byCat[c] !== 2) fail(`类别 ${c} 抽了 ${draw.byCat[c]} 题，应该是 2 题`);
+  });
+  if (JSON.stringify(draw.meta.map((m) => m.id)) !== JSON.stringify(draw.expected)) {
+    fail(`抽到的题和种子算出来的不一致：${draw.meta.map((m) => m.id)} vs ${draw.expected}`);
+  } else {
+    ok(`G03 抽题：种子 ${draw.seed} 抽出 6 题，每类 2 题、不重复、可复现` +
+       `（其中 fig 题 ${draw.meta.filter((m) => m.fig).length} 道）`);
+  }
+  if (draw.npcBad.length) fail("npcByClue 接线有问题：" + draw.npcBad.join(", "));
+  else ok(`G03 线索类别会改变她俩的猜测方向（${draw.overrides} 道题带 npcByClue）`);
+
+  // ---- §5.1 蒙版：像素哈希可复现、格长单调递减、老 PNG 也走 canvas ----
+  const mask = await page.evaluate(async () => {
+    const W = window.DAILY.games.wordgame;
+    const M = W.WGMask;
+    const qs = W.QUESTIONS;
+    const fig = qs.filter((q) => q.fig)[0];
+    const old = qs.filter((q) => q.sil)[0];
+    const mk = () => {
+      const c = document.createElement("canvas");
+      c.width = 96;
+      c.height = 96;
+      return c;
+    };
+    const opaque = (c) => {
+      const d = c.getContext("2d").getImageData(0, 0, 96, 96).data;
+      let n = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+      return n;
+    };
+    await M.prepare(fig);
+    const a = mk(), b = mk(), c1 = mk(), c2 = mk(), c3 = mk(), c4 = mk();
+    M.render(a, fig, 1);
+    M.render(b, fig, 1);
+    M.render(c1, fig, 1);
+    M.render(c2, fig, 2);
+    M.render(c3, fig, 3);
+    M.render(c4, fig, 4);
+    // 老题：PNG 也画到 canvas 上。file:// 下这种画布被浏览器标成跨源脏画布，
+    // 读不了像素，只能验「确实画上去了」；能读像素的只有纯矢量的 fig 题。
+    await M.prepare(old);
+    const oldCv = mk();
+    const oldDrew = M.render(oldCv, old, 1);
+    const propNames = Object.keys(M.PROPS);
+    const bodyNames = Object.keys(M.BODIES);
+    const bad = [];
+    qs.forEach((q) => {
+      if (q.fig) {
+        if (bodyNames.indexOf(q.fig.body) < 0) bad.push(q.id + ":body:" + q.fig.body);
+        (q.fig.props || []).forEach((p) => {
+          if (propNames.indexOf(p) < 0) bad.push(q.id + ":prop:" + p);
+        });
+      } else if (!q.sil) bad.push(q.id + ":no-fig-no-sil");
+      (q.clues || []).forEach((c) => {
+        if (["look", "story", "quote"].indexOf(c.k) < 0) bad.push(q.id + ":k");
+      });
+    });
+    return {
+      n: qs.length,
+      figN: qs.filter((q) => q.fig).length,
+      silN: qs.filter((q) => q.sil).length,
+      props: propNames.length,
+      bodies: bodyNames.length,
+      bad: bad,
+      cell: [M.cellFor(1), M.cellFor(2), M.cellFor(3), M.cellFor(4)],
+      seedStable: M.seedOf(fig.id) === M.seedOf(fig.id),
+      seeds: qs.map((q) => ({ id: q.id, seed: M.seedOf(q.id) })),
+      hashA: M.pixelHash(a),
+      hashB: M.pixelHash(b),
+      revealHashes: [M.pixelHash(c1), M.pixelHash(c2), M.pixelHash(c3), M.pixelHash(c4)],
+      figPixels: opaque(a),
+      oldDrew: oldDrew
+    };
+  });
+  if (mask.n !== 18) fail(`G03 题库 ${mask.n} 题，应该是 18 题`);
+  if (mask.figN !== 9 || mask.silN !== 9) fail(`G03 fig/sil 题数 ${mask.figN}/${mask.silN}，应该是 9/9`);
+  if (mask.props < 20) fail(`WGMask 道具表只有 ${mask.props} 件，应该约 20 件`);
+  if (mask.bodies !== 4) fail(`WGMask 体型有 ${mask.bodies} 种，应该是 4 种`);
+  if (mask.bad.length) fail("G03 题库数据有问题：" + mask.bad.slice(0, 6).join(", "));
+  const cells = mask.cell;
+  if (!(cells[0] === 16 && cells[1] === 10 && cells[2] === 5 && cells[3] === 0)) {
+    fail(`G03 马赛克格长不是 16/10/5/0：${cells.join("/")}`);
+  } else if (!(cells[0] > cells[1] && cells[1] > cells[2] && cells[2] > cells[3])) {
+    fail("G03 马赛克格长没有随线索数单调递减");
+  } else {
+    ok("G03 马赛克格长随线索数单调递减：1条 16px → 2条 10px → 3条 5px → 公布答案全清");
+  }
+  if (!mask.seedStable) fail("G03 题 id 的蒙版种子不稳定");
+  // 种子必须真的等于「题 id 的哈希」：这里用同一套 FNV-1a 在 Node 侧独立算一遍。
+  const fnv = (s) => {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return h >>> 0;
+  };
+  const seedBad = mask.seeds.filter((s) => s.seed !== fnv(s.id));
+  if (seedBad.length) {
+    fail("G03 蒙版种子不是题目 id 的哈希：" + seedBad.slice(0, 3).map((s) => s.id).join(", "));
+  } else {
+    ok(`G03 蒙版种子 = 题目 id 哈希（${mask.seeds.length} 道题都对得上）`);
+  }
+  if (mask.hashA === 0 || mask.hashA !== mask.hashB) {
+    fail(`G03 fig 题渲染像素哈希不可复现（${mask.hashA} / ${mask.hashB}）`);
+  } else {
+    ok(`G03 fig 题（${mask.figN ? "9 道" : "?"}）同一种子两次渲染像素哈希一致`);
+  }
+  if (new Set(mask.revealHashes).size !== 4) {
+    fail("G03 线索推进时蒙版画面没有逐级变化：" + mask.revealHashes.join(","));
+  } else {
+    ok("G03 四档蒙版（16/10/5/0）画面互不相同");
+  }
+  if (mask.figPixels < 120) fail(`G03 fig 剪影像素太少（${mask.figPixels} 个不透明像素）`);
+  if (!mask.oldDrew) fail("G03 老题的 PNG 没有画到 canvas 上");
+
+  // ---- R0：窗过 → 她俩按类别猜 → 用提示 → 新窗答对只算半拍 ----
+  if (!(await waitRound(0))) fail("等不到第 1 回合的抢答窗");
+  let st = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return {
+      buzz: !!(g && g.buzzActive),
+      state: g && g.state,
+      reveal: g && g.maskReveal,
+      cell: g && g.maskCell,
+      clues: document.getElementById("wgClues").children.length,
+      buzzBar: !document.getElementById("wgBuzz").hidden,
+      round: document.getElementById("wgRound").textContent
+    };
+  });
+  if (!st.buzz || !st.buzzBar) fail("第 1 回合没有开抢答窗（进度条不可见）");
+  else ok("G03 每条线索展示后开 2.2 秒抢答窗（细条可见）");
+  if (st.clues !== 1) fail(`第 1 回合一开始有 ${st.clues} 条线索`);
+  if (st.reveal !== 1 || st.cell !== 16) {
+    fail(`1 条线索时蒙版不是 16px：reveal=${st.reveal} cell=${st.cell}`);
+  }
+  if (st.round.indexOf("第 1 / 6") < 0) fail(`回合标题是「${st.round}」`);
+  await page.screenshot({ path: path.join(OUT, "d6-word.png") });
+  await noOverlap(page, "#reactBtn", "#wgInput", "G03");
+  await noOverlap(page, "#reactBtn", "#wgOpts", "G03");
+  await pokeOnce(page, "G03", "word_guess", "pokeCount", "抢答",
+    [["我猜到了，能说了吗"], ["那就说啊"]]);
+  await page.screenshot({ path: path.join(OUT, "d6a-poke.png") });
+
+  await page.waitForFunction(() => !window.__daily.current.buzzActive, null, { timeout: 6000 });
+  const npcExpect = await page.evaluate(() => {
+    const W = window.DAILY.games.wordgame;
+    const g = window.__daily.current;
+    const q = g.drawn[g.roundIndex];
+    const guess = W.npcGuess(q, q.clues[0].k);
+    return {
+      text: guess.text,
+      override: !!(q.npcByClue && q.npcByClue[q.clues[0].k]),
+      base: q.npc.text
+    };
+  });
+  await page.waitForFunction((t) => document.getElementById("wgSay").textContent.indexOf(t) >= 0,
+    npcExpect.text, { timeout: 8000 })
+    .catch(() => fail(`抢答窗走完她俩没有开口（没听到「${npcExpect.text}」）`));
+  if (npcExpect.override && npcExpect.text === npcExpect.base) {
+    fail("这条线索的类别没有改变她俩的猜测方向");
+  }
+  await skipSaysUntil(() => {
+    const g = window.__daily.current;
+    return g.state === "ask" && !g.buzzActive;
+  });
+  st = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return { state: g && g.state, buzz: !!(g && g.buzzActive) };
+  });
+  if (st.state !== "ask" || st.buzz) fail(`窗过之后没有轮到玩家再答（state=${st.state}）`);
+
+  const pickedKind = await page.evaluate(() => {
+    const b = document.querySelector("#wgPick button");
+    return b ? b.dataset.kind : null;
+  });
+  await page.evaluate(() => document.getElementById("wgHint").click());
+  await page.waitForTimeout(400);
+  const pick = await page.evaluate(() => ({
+    shown: !document.getElementById("wgPick").hidden,
+    kinds: [...document.querySelectorAll("#wgPick button")].map((b) => b.dataset.kind)
+  }));
+  if (!pick.shown) {
+    fail("两条线索类别不同，却没有让玩家挑先听哪类");
+  } else {
+    if (pick.kinds.length !== 2) fail(`类别选择给了 ${pick.kinds.length} 个按钮`);
+    await page.screenshot({ path: path.join(OUT, "d7b-pick.png") });
+    await clickSel("#wgPick button");
+  }
+  await page.waitForFunction(() => document.getElementById("wgClues").children.length === 2,
+    null, { timeout: 8000 }).catch(() => fail("用了提示之后没有揭出第 2 条线索"));
+  await page.waitForTimeout(300);
+  const afterHint = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return {
+      reveal: g && g.maskReveal,
+      cell: g && g.maskCell,
+      kinds: [...document.querySelectorAll("#wgClues li")].map((li) => li.dataset.k),
+      buzz: !!(g && g.buzzActive)
+    };
+  });
+  if (afterHint.reveal !== 2 || afterHint.cell !== 10) {
+    fail(`2 条线索时蒙版不是 10px：reveal=${afterHint.reveal} cell=${afterHint.cell}`);
+  }
+  if (pick.shown && pickedKind) {
+    if (afterHint.kinds.length !== 2) fail("线索列表不是 2 条");
+    else if (afterHint.kinds[1] !== pickedKind) {
+      fail(`点选的类别是 ${pickedKind}，展开的第 2 条却是 ${afterHint.kinds[1]}`);
+    }
+  }
+  await page.waitForFunction(() => !!(window.__daily.current && window.__daily.current.buzzActive),
+    null, { timeout: 6000 }).catch(() => fail("揭出新线索后没有再开抢答窗"));
+  await page.waitForTimeout(240);
+  await clickSel('#wgOpts button[data-ans="1"]:not(:disabled)');
+  await page.waitForTimeout(1500);
+  st = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return { full: g && g.fullWins, half: g && g.halfWins, score: g && g.score };
+  });
+  if (st.full !== 0 || st.half !== 1) {
+    fail(`用提示之后答对应该只算半分：full=${st.full} half=${st.half}`);
+  }
+  if (Math.abs(st.score - 0.5) > 1e-6) fail(`第 1 回合分数应该是 0.5，是 ${st.score}`);
+  ok("G03 窗过她俩先猜、玩家再答半分；「再给点提示」只算半拍");
+
+  // ---- R1：窗内答对 = 满分 ----
+  if (!(await waitRound(1))) fail("等不到第 2 回合");
+  await clickSel('#wgOpts button[data-ans="1"]:not(:disabled)');
+  await page.waitForTimeout(1300);
+  st = await page.evaluate(() => ({
+    full: window.__daily.current.fullWins,
+    score: window.__daily.current.score
+  }));
+  if (st.full !== 1) fail(`窗内答对没记满分（fullWins=${st.full}）`);
+  if (Math.abs(st.score - 1.5) > 1e-6) fail(`第 2 回合之后分数应该是 1.5，是 ${st.score}`);
+  ok("G03 抢答窗内答对得满分");
+
+  // ---- R2：窗过 → 她俩猜 → 玩家再答半分（第二种半分路径） ----
+  if (!(await waitRound(2))) fail("等不到第 3 回合");
+  await page.waitForFunction(() => !window.__daily.current.buzzActive, null, { timeout: 6000 });
+  if (!(await skipSaysUntil(() => {
+    const g = window.__daily.current;
+    return g.state === "ask" && !g.buzzActive;
+  }))) fail("第 3 回合窗过之后没有轮到玩家再答");
+  await clickSel('#wgOpts button[data-ans="1"]:not(:disabled)');
+  await page.waitForTimeout(1300);
+  st = await page.evaluate(() => ({
+    half: window.__daily.current.halfWins,
+    score: window.__daily.current.score
+  }));
+  if (st.half !== 2) fail(`窗过之后答对没记半拍（halfWins=${st.half}）`);
+  if (Math.abs(st.score - 2.0) > 1e-6) fail(`第 3 回合之后分数应该是 2.0，是 ${st.score}`);
+
+  // ---- R3：满分第二例（半场闲聊之后） ----
+  if (!(await waitRound(3))) fail("等不到第 4 回合（半场闲聊之后）");
+  await clickSel('#wgOpts button[data-ans="1"]:not(:disabled)');
+  await page.waitForTimeout(1300);
+  st = await page.evaluate(() => ({ full: window.__daily.current.fullWins }));
+  if (st.full !== 2) fail(`窗内答对没记满分（fullWins=${st.full}）`);
+
+  // ---- R4：三条线索都答错 → 格长 16/10/5 → 公布答案全清 ----
+  if (!(await waitRound(4))) fail("等不到第 5 回合");
+  await clickSel('#wgOpts button:not([data-ans]):not(:disabled)');
+  let adv = await advanceToBuzz();
+  if (!adv.sawPick) fail("第 5 回合揭第 2 条线索前没有出现类别选择");
+  await page.waitForTimeout(300);
+  st = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return {
+      clues: document.getElementById("wgClues").children.length,
+      reveal: g && g.maskReveal,
+      cell: g && g.maskCell
+    };
+  });
+  if (st.clues !== 2) fail(`第 5 回合第 2 条线索没出来（clues=${st.clues}）`);
+  if (st.reveal !== 2 || st.cell !== 10) {
+    fail(`第 2 条线索时蒙版不是 10px：reveal=${st.reveal} cell=${st.cell}`);
+  }
+  await clickSel('#wgOpts button:not([data-ans]):not(:disabled)');
+  adv = await advanceToBuzz();
+  if (!adv.ok) fail("第 5 回合答错第 2 条线索之后没有进下一条");
+  await page.waitForTimeout(320);
+  st = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return {
+      clues: document.getElementById("wgClues").children.length,
+      reveal: g && g.maskReveal,
+      cell: g && g.maskCell
+    };
+  });
+  if (st.clues !== 3) fail(`第 5 回合第 3 条线索没出来（clues=${st.clues}）`);
+  if (st.reveal !== 3 || st.cell !== 5) {
+    fail(`第 3 条线索时蒙版不是 5px：reveal=${st.reveal} cell=${st.cell}`);
+  }
+  await page.screenshot({ path: path.join(OUT, "d7-clue.png") });
+  await clickSel('#wgOpts button:not([data-ans]):not(:disabled)');
+  await page.waitForFunction(() => window.__daily.current && window.__daily.current.maskReveal === 4,
+    null, { timeout: 15000 }).catch(() => fail("三条线索都答错之后没有公布答案（蒙版没全清）"));
+  await page.waitForTimeout(320);
+  st = await page.evaluate(() => ({ cell: window.__daily.current.maskCell }));
+  if (st.cell !== 0) fail(`公布答案之后蒙版还剩 ${st.cell}px`);
+  else ok("G03 三条线索答错 → 公布答案，蒙版全清");
+  await page.screenshot({ path: path.join(OUT, "d7a-answer.png") });
+
+  // ---- R5：最后一条线索窗内答对 ----
+  if (!(await waitRound(5))) fail("等不到第 6 回合");
+  await clickSel('#wgOpts button[data-ans="1"]:not(:disabled)');
+  await page.waitForTimeout(1300);
+  const stats = await page.evaluate(() => window.__daily.current.stats);
+  if (stats.correct !== 5) fail(`答对回合数应该是 5，是 ${stats.correct}`);
+  if (Math.abs(stats.score - 4.0) > 1e-6) fail(`总分应该是 4.0，是 ${stats.score}`);
+  if (stats.fullWins !== 3) fail(`满分抢答应该是 3 次，是 ${stats.fullWins}`);
+  if (stats.halfWins !== 2) fail(`半分应该是 2 次，是 ${stats.halfWins}`);
+  if (stats.hints !== 1) fail(`提示次数应该是 1，是 ${stats.hints}`);
+  ok("G03 6 回合分数 4.0（满分 3 次 / 半分 2 次、答对 5 回合、用提示 1 次）");
+
+  // ---- §5.4 换你出题两轮：第二轮排除上一轮出过的词和猜错的词 ----
+  await page.waitForFunction(() => {
+    const g = window.__daily.current;
+    return g && g.state === "swap" && g.swapState === "pick" &&
+      document.querySelectorAll("#wgSwapOpts button").length === 3;
+  }, null, { timeout: 25000 }).catch(() => fail("六题之后没有出现「换你出题」"));
+  const swapPanel = await page.evaluate(() => ({
+    round: document.getElementById("wgRound").textContent,
+    optsHidden: document.getElementById("wgOpts").hidden,
+    cluesHidden: document.getElementById("wgClues").hidden,
+    state: window.__daily.current.swapState,
+    data: window.__daily.current.swapData
+  }));
+  if (swapPanel.round.indexOf("换你出题") < 0) fail(`G03 插曲标题是「${swapPanel.round}」`);
+  if (!swapPanel.optsHidden || !swapPanel.cluesHidden) fail("G03「换你出题」时原来的题面还挂着");
+  if (swapPanel.data.round !== 0) fail(`「换你出题」第一轮 round 是 ${swapPanel.data.round}`);
+  if (swapPanel.data.options.length !== 3) fail(`第一轮词卡 ${swapPanel.data.options.length} 个`);
   await noOverlap(page, "#reactBtn", "#wgSwapOpts", "G03 插曲");
   await page.screenshot({ path: path.join(OUT, "d6b-swap.png") });
-  await page.click("#wgSwapOpts button:nth-child(2)");
-  await page.waitForFunction(() => {
-    const g = window.__daily.current;
-    return g && g.swapChoice === 1;
-  }, null, { timeout: 5000 }).catch(() => fail("G03「换你出题」选了第二个词，没记下来"));
 
-  // 挑完词就该摊出三句线索：先挑那句其实像「抢票」的，验她俩真的会猜偏
-  await page.waitForTimeout(200);
-  const swapClues = await page.evaluate(() => ({
-    lead: document.getElementById("wgSwapLead").textContent,
-    n: document.querySelectorAll("#wgSwapClues button").length,
-    optsHidden: document.getElementById("wgSwapOpts").hidden,
-    state: window.__daily.current.swapState
-  }));
-  if (swapClues.n !== 3) fail(`G03 出题摊出 ${swapClues.n} 句线索，应该是 3 句`);
-  if (swapClues.lead.indexOf("剧透") < 0) fail(`G03 出题没把挑的词摆出来：「${swapClues.lead}」`);
-  if (!swapClues.optsHidden) fail("G03 挑完词之后词卡还挂着");
-  if (swapClues.state !== "clues") fail(`G03 挑完词之后状态是 ${swapClues.state}`);
+  await page.evaluate(() => document.querySelector('#wgSwapOpts button[data-word="1"]').click());
+  await page.waitForFunction(() => window.__daily.current.swapState === "clues", null, { timeout: 5000 });
+  const clues1 = await page.evaluate(() => window.__daily.current.swapData);
+  const misfit = clues1.clues.findIndex((c) => !c.fits);
+  const fits = clues1.clues.map((c, i) => (c.fits ? i : -1)).filter((i) => i >= 0);
+  const mislead = misfit >= 0 ? clues1.clues[misfit].mislead : null;
+  if (misfit < 0 || !mislead) fail("「剧透」这组没有误导线索，自检没法验「猜偏」");
   await page.screenshot({ path: path.join(OUT, "d6b2-swap-clues.png") });
-
-  await page.click('#wgSwapClues button[data-clue="0"]');
-  await page.waitForFunction(() => {
-    const g = window.__daily.current;
-    return g && g.swapUsed === 1 &&
-      document.getElementById("wgSwapSay").textContent.indexOf("抢票") >= 0;
-  }, null, { timeout: 5000 }).catch(() => fail("G03 出题：不像的那句没让她俩猜偏"));
+  await page.evaluate((i) => {
+    const b = document.querySelector('#wgSwapClues button[data-clue="' + i + '"]');
+    if (b) b.click();
+  }, misfit);
+  await page.waitForFunction((t) => document.getElementById("wgSwapSay").textContent.indexOf(t) >= 0,
+    mislead, { timeout: 6000 }).catch(() => fail("G03 第一轮误导线索没有让她俩猜偏"));
+  let learned = await page.evaluate(() => window.__daily.current.learnedCats);
+  if (learned.indexOf(mislead) < 0) {
+    fail("G03 第一轮猜错的方向没有记进主持人状态 learnedCats：" + JSON.stringify(learned));
+  } else {
+    ok(`G03 第一轮她俩被误导线索带偏（learnedCats=${JSON.stringify(learned)}）`);
+  }
   await page.screenshot({ path: path.join(OUT, "d6c-swap-wrong.png") });
-
-  await page.click('#wgSwapClues button[data-clue="1"]');
-  await page.waitForTimeout(1500);
-  await page.click('#wgSwapClues button[data-clue="2"]');
+  for (const i of fits) {
+    await page.waitForTimeout(1100);
+    await page.evaluate((j) => {
+      const b = document.querySelector('#wgSwapClues button[data-clue="' + j + '"]');
+      if (b && !b.disabled) b.click();
+    }, i);
+  }
   await page.waitForFunction(() => {
     const g = window.__daily.current;
-    return g && g.swapUsed === 3 &&
-      document.getElementById("wgSwapSay").textContent.indexOf("剧透？") >= 0;
-  }, null, { timeout: 6000 }).catch(() => fail("G03 出题：补两句之后没猜回「剧透」"));
+    return g && g.swapRoundIdx === 1 && document.querySelectorAll("#wgSwapOpts button").length === 3;
+  }, null, { timeout: 20000 }).catch(() => fail("第一轮出题之后没有进第二轮"));
+  const round2 = await page.evaluate(() => window.__daily.current.swapData);
+  if (round2.round !== 1) fail(`第二轮 round 是 ${round2.round}`);
+  const enabled = round2.options.filter((o) => !o.disabled);
+  const disabled = round2.options.filter((o) => o.disabled);
+  if (enabled.length !== 1) {
+    fail(`第二轮能选的词有 ${enabled.length} 个，应该只剩没出过、也没被排除的那一个：` +
+      JSON.stringify(round2.options));
+  }
+  if (disabled.length !== 2) fail(`第二轮排除的词有 ${disabled.length} 个，应该是 2 个`);
+  const disText = disabled.map((o) => o.text).join(" / ");
+  if (disText.indexOf("剧透") < 0) fail("G03 第二轮没有排除第一轮出过的词：" + disText);
+  if (disText.indexOf(mislead) < 0) fail("G03 第二轮没有排除第一轮猜错的词：" + disText);
+  else ok(`G03 第二轮排除出过的词 + 第一轮猜错的词，只剩「${enabled[0] ? enabled[0].text : "?"}」`);
+  await page.screenshot({ path: path.join(OUT, "d6d-swap2.png") });
 
+  await page.evaluate(() => document.querySelector("#wgSwapOpts button:not(:disabled)").click());
+  await page.waitForFunction(() => window.__daily.current.swapState === "clues", null, { timeout: 5000 });
+  const clues2 = await page.evaluate(() => window.__daily.current.swapData);
+  const misfit2 = clues2.clues.findIndex((c) => !c.fits);
+  const fits2 = clues2.clues.map((c, i) => (c.fits ? i : -1)).filter((i) => i >= 0);
+  await page.evaluate((i) => {
+    const b = document.querySelector('#wgSwapClues button[data-clue="' + i + '"]');
+    if (b && !b.disabled) b.click();
+  }, misfit2);
+  await page.waitForFunction(() => document.getElementById("wgSwapSay").textContent.indexOf("上一轮") >= 0,
+    null, { timeout: 6000 })
+    .catch(() => fail("G03 第二轮遇到同样的误导，她俩没有说出「上一轮就栽在这儿」"));
+  learned = await page.evaluate(() => window.__daily.current.learnedCats);
+  if (learned.length !== 1) fail("G03 第二轮把已经学过的词又记了一遍：" + JSON.stringify(learned));
+  else ok("G03 第二轮同样的误导只让她们犹豫半拍（台词里明说上一轮猜错过）");
+  await page.screenshot({ path: path.join(OUT, "d6e-swap2-wrong.png") });
+  for (const i of fits2) {
+    await page.waitForTimeout(1100);
+    await page.evaluate((j) => {
+      const b = document.querySelector('#wgSwapClues button[data-clue="' + j + '"]');
+      if (b && !b.disabled) b.click();
+    }, i);
+  }
   await page.waitForFunction(() => document.getElementById("wg").hidden, null, { timeout: 25000 })
-    .catch(() => fail("六回合走完，猜词面板没有关掉"));
-  await page.waitForTimeout(400);
-  await advanceAll(page);
-  await page.waitForTimeout(1200);
-  await advanceAll(page);
-  await page.waitForTimeout(1500);
+    .catch(() => fail("两轮出题之后猜词面板没有关掉"));
 
+  // ---- 收尾：对白读完回目录，存档正确 ----
+  const tEnd = Date.now();
+  while (Date.now() - tEnd < 20000) {
+    const stt = await page.evaluate(() => ({
+      hub: document.getElementById("hub").classList.contains("show"),
+      dlg: window.DAILY.dialogOpen()
+    }));
+    if (stt.hub) break;
+    if (stt.dlg) await page.keyboard.press("KeyE");
+    await page.waitForTimeout(120);
+  }
   const done = await page.evaluate(() => ({
     hub: document.getElementById("hub").classList.contains("show"),
     saved: window.__daily.store().wordGameCompleted === true,
-    correct: window.__daily.store().wordGameCorrect
+    correct: window.__daily.store().wordGameCorrect,
+    hints: window.__daily.store().wordGameHints,
+    runs: window.__daily.store().wordRuns
   }));
   if (!done.hub) fail("猜词结束没有回到目录");
   if (!done.saved) fail("猜词结束没有存下 wordGameCompleted");
-  if (done.correct !== total) fail(`${total} 题都点对了，存档里 correct 是 ${done.correct}`);
+  if (done.correct !== 5) fail(`存档 wordGameCorrect 是 ${done.correct}，应该是 5（6 题里错 1 题）`);
+  if (done.hints !== 1) fail(`存档 wordGameHints 是 ${done.hints}，应该是 1`);
+  if (done.runs !== runsBefore + 1) fail(`游玩次 wordRuns 是 ${done.runs}，应该是 ${runsBefore + 1}`);
+  else ok("G03 收尾回目录：wordGameCompleted / correct=5 / hints=1 / wordRuns+1 都对");
   return done;
 }
 
@@ -1271,6 +2174,23 @@ async function runSearchEarly(page) {
   let s = await S(page);
   if (s.state !== "search") fail(`G02 开场读完状态是 ${s.state}，应该是 search`);
   if (!s.obj) fail("G02 开始后没有目标卡");
+  // §4.1 首通（游玩次 0）仍然固定在楼梯口窗台，落点/路线/提示第三句都不变。
+  const firstRound = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return {
+      runs: g.runs, spot: g.cardSpot, route: g.route, steps: g.steps,
+      savedRuns: window.__daily.store().searchRuns
+    };
+  });
+  if (firstRound.runs !== 0) fail(`G02 首通 runs 不是 0：${firstRound.runs}`);
+  if (firstRound.savedRuns !== 1) fail(`G02 首通开始后 searchRuns 没落盘：${firstRound.savedRuns}`);
+  if (firstRound.spot.id !== "stairSill" || firstRound.spot.x !== 300) {
+    fail(`G02 首通落点不是楼梯口窗台：${firstRound.spot.id} @ ${firstRound.spot.x}`);
+  }
+  if (firstRound.route.join(",") !== "classroom,cooler,windowsill") {
+    fail(`G02 首通路线变了：${firstRound.route}`);
+  }
+  if (firstRound.steps !== 0) fail(`G02 刚开场 steps 不是 0：${firstRound.steps}`);
 
   // F 自言自语：不能顺手把「问问由乃」的三级提示次数吃掉
   const beforePoke = await page.evaluate(() => window.__daily.current.hints);
@@ -1290,6 +2210,13 @@ async function runSearchEarly(page) {
 
   await ensureScene(page, "stair", "KeyA");
   await page.waitForTimeout(200);
+  // §4.3 步数：自动走一次换场，steps 应该正好 +1（onScene 在淡入之后才计）
+  await page.waitForFunction(() => {
+    const g = window.__daily.current;
+    return !!g && g.steps >= 1;
+  }, null, { timeout: 8000 }).catch(() => {});
+  const walked = await page.evaluate(() => window.__daily.current.steps);
+  if (walked !== 1) fail(`G02 走一次换场，steps 应该是 1，实际 ${walked}`);
 
   await approach(page, 300);
   await waitHint(page, "窗台");
@@ -1320,7 +2247,29 @@ async function runSearchEarly(page) {
     const g = window.__daily.current;
     return g && g.returnChoice === 2;
   }, null, { timeout: 5000 }).catch(() => fail("G02 选了「先喊她一声」，returnChoice 没记上"));
-  await drain(page, 16000);
+  // 一边读收尾一边把台词记下来：§4.3 的步数评价只在措辞里，得看真的说了。
+  const earlyLines = [];
+  const et0 = Date.now();
+  while (Date.now() - et0 < 16000) {
+    const st = await page.evaluate(() => ({
+      hub: document.getElementById("hub").classList.contains("show"),
+      dlg: window.DAILY.dialogOpen(),
+      who: document.getElementById("who").textContent,
+      line: document.getElementById("line").textContent
+    }));
+    if (st.hub) break;
+    if (st.dlg) {
+      earlyLines.push(st.who + "：" + st.line);
+      await page.keyboard.press("KeyE");
+      await page.waitForTimeout(85);
+    } else await page.waitForTimeout(120);
+  }
+  if (!earlyLines.some((x) => x.indexOf("心里有谱") >= 0)) {
+    fail(`G02 首通只走了 1 次换场，收尾没有少步数口径（实际：${earlyLines.join(" | ")}）`);
+  }
+  if (!earlyLines.some((x) => x.indexOf("在楼梯口，窗台上") >= 0)) {
+    fail("G02 首通收尾的地点文案变了（应该还是楼梯口窗台）");
+  }
 
   const done = await page.evaluate(() => ({
     hub: document.getElementById("hub").classList.contains("show"),
@@ -1333,13 +2282,94 @@ async function runSearchEarly(page) {
   return done;
 }
 
-/** G02 第二条路：看三处、翻线索本、问三级提示，再去捡卡。 */
+/** G02 第二条路：先验四轮卡位的数据能唯一求解，再正经玩一遍第二轮的落点
+ *  （问人 → 看线索 → 拼平面图 → 捡卡），最后验一件旧存档读进来不报错。 */
 async function runSearch(page) {
   const trace = [];
   const mark = async (tag) => {
     const s = await S(page);
     trace.push(tag + " scene=" + s.scene + " x=" + (s.boy == null ? "-" : Math.round(s.boy)) + " dlg=" + s.dlg);
   };
+  const G2 = () => page.evaluate(() => {
+    const g = window.__daily.current;
+    if (!g) return null;
+    return {
+      state: g.state, scene: g.scene, x: g.x, y: g.y, dlg: window.DAILY.dialogOpen(),
+      steps: g.steps, runs: g.runs, round: g.round, cardSpot: g.cardSpot,
+      clues: g.clues.slice(), hints: g.hints, askOpen: g.askOpen,
+      pins: g.pins.slice(), routeSolved: g.routeSolved, routeTries: g.routeTries,
+      mapOpen: g.mapOpen, nearPoint: g.nearPoint, returnChoice: g.returnChoice,
+      store: (function () { const s = window.__daily.store(); return JSON.parse(JSON.stringify(s)); })()
+    };
+  });
+
+  // ================= §4.1 四个落点的线索链：数据层自动求解 =================
+  // 只拿「这一轮的四处真线索」，按 step 归位，必须恰好指向路线三站；
+  // 四轮的顺序路线两两不同，所以仅凭真线索就能唯一确定落点。
+  const rounds = await page.evaluate(() =>
+    [0, 1, 2, 3].map((n) => window.DAILY.games.search.roundInfo(n)));
+  const routeSigs = [];
+  const destSigs = [];
+  for (const rd of rounds) {
+    if (rd.truePoints.length !== 4) fail(`G02 第 ${rd.n} 轮真线索点不是 4 个：${rd.truePoints}`);
+    const byStep = {};
+    for (const pid of Object.keys(rd.variants)) {
+      if (rd.truePoints.indexOf(pid) < 0) fail(`G02 第 ${rd.n} 轮把变体线索挂在非真线索点 ${pid} 上`);
+      for (const c of rd.variants[pid]) {
+        const st = c.step | 0;
+        if (st < 1 || st > 3) fail(`G02 第 ${rd.n} 轮《${pid}》的线索 step=${c.step}，应为 1..3`);
+        (byStep[st] || (byStep[st] = [])).push(c);
+        if (!rd.spots[c.pin]) fail(`G02 第 ${rd.n} 轮线索钉到不存在的地点 ${c.pin}`);
+        if (!c.text) fail(`G02 第 ${rd.n} 轮有空白线索文本`);
+      }
+    }
+    for (let st = 1; st <= 3; st++) {
+      const arr = byStep[st];
+      if (!arr || !arr.length) { fail(`G02 第 ${rd.n} 轮第 ${st} 站没有真线索（死路）`); continue; }
+      const pinsAt = [...new Set(arr.map((c) => c.pin))];
+      if (pinsAt.length !== 1) fail(`G02 第 ${rd.n} 轮第 ${st} 站的线索指向 ${pinsAt}，有歧义`);
+      if (pinsAt[0] !== rd.route[st - 1]) {
+        fail(`G02 第 ${rd.n} 轮第 ${st} 站线索指向 ${pinsAt[0]}，路线却是 ${rd.route[st - 1]}`);
+      }
+    }
+    if (rd.route.length !== 3) fail(`G02 第 ${rd.n} 轮路线不是 3 站`);
+    if (rd.dest !== rd.route[2]) fail(`G02 第 ${rd.n} 轮落点和路线最后一站不一致`);
+    routeSigs.push(rd.route.join(">"));
+    destSigs.push(rd.dest);
+    for (const who of ["girl", "friend"]) {
+      if (!rd.answers[who] || rd.answers[who].length !== 3) {
+        fail(`G02 第 ${rd.n} 轮 ${who} 的问题答案不是 3 条`);
+      }
+    }
+    if (rd.confirms.length !== 2) fail(`G02 第 ${rd.n} 轮关键问题不是 2 个`);
+    for (const c of rd.confirms) {
+      const vs = rd.variants[c.point] || [];
+      if (!vs.some((x) => x.pin === c.pin)) {
+        fail(`G02 第 ${rd.n} 轮印证版指向不存在的线索 ${c.point}/${c.pin}`);
+      }
+    }
+    if (!rd.answers.girl.some((a) => a.pin === "cctv")) fail(`G02 第 ${rd.n} 轮缺监控这个干扰线索`);
+  }
+  if (new Set(routeSigs).size !== 4) fail("G02 有两轮的顺序路线完全一样，仅凭线索分不出落点");
+  if (new Set(destSigs).size !== 4) fail("G02 有两轮的落点一样");
+  const firstRd = rounds[0];
+  if (firstRd.spot.id !== "stairSill" || firstRd.route.join(",") !== "classroom,cooler,windowsill") {
+    fail("G02 首通落点 / 路线不再和旧版一致（游玩次 0 应该恒定为楼梯口窗台）");
+  }
+  if (firstRd.hint3.indexOf("楼梯口那个窗台") < 0) fail("G02 首通第三条提示变了");
+  ok("G02 四轮卡位：每轮 4 处真线索、三站各 1 个唯一指向、落点两两不同");
+
+  // §4.3 步数评价：少 / 多两种口径都在，只影响措辞，不进存档。
+  const verdicts = await page.evaluate(() => ({
+    low: window.DAILY.games.search.stepVerdict(2),
+    mid: window.DAILY.games.search.stepVerdict(5),
+    high: window.DAILY.games.search.stepVerdict(8)
+  }));
+  if (verdicts.low.join("").indexOf("心里有谱") < 0) fail("G02 步数少的时候没有「心里有谱」口径");
+  if (verdicts.high.join("").indexOf("腿都跑细了") < 0) fail("G02 步数多的时候没有「腿都跑细了」口径");
+  if (!verdicts.mid.length) fail("G02 中等步数没有说话");
+
+  // ================= 第二遍：游玩次 1 → 楼梯拐角台阶 =================
   await page.click('#hubList li[data-id="search"]');
   await page.waitForTimeout(1200);
   await advanceAll(page);
@@ -1347,27 +2377,144 @@ async function runSearch(page) {
 
   let s = await S(page);
   if (s.state !== "search") fail(`G02 重玩时状态是 ${s.state}`);
+  let g = await G2();
+  if (g.runs !== 1) fail(`G02 第二遍 runs 应该是 1，实际 ${g.runs}`);
+  if (g.round.spot.id !== "stairSteps") fail(`G02 第二遍抽到的不是楼梯拐角台阶：${g.round.spot.id}`);
+  if (g.round.route.join(",") !== "classroom,cooler,stair") fail(`G02 第二遍路线不对：${g.round.route}`);
+  if (g.steps !== 0) fail(`G02 第二遍刚开场 steps 不是 0：${g.steps}`);
+  ok(`G02 第二遍抽到新落点：${g.round.spot.name}（${g.round.routeNames.join(" → ")}）`);
+  const round = g.round;
+  const P = round.points;
+  let stepMark = g.steps;
   await page.screenshot({ path: path.join(OUT, "s3-start.png") });
 
-  // 门缝
-  await approach(page, 256);
-  await mark("门缝");
+  // ---- 先看门缝、门牌：她俩就在这一片等，观察点看完之后 E 才轮到「问人」
+  //      （观察点优先，问话不能把想看的门缝 / 牌子抢掉）
+  await approach(page, P.door.x);
   await waitHint(page, "门缝");
   await page.keyboard.press("KeyE");
   await page.waitForTimeout(300);
   await advanceAll(page);
   await page.waitForTimeout(250);
+  await approach(page, P.plate.x);
+  await waitHint(page, "门边的牌子");
+  await page.keyboard.press("KeyE");
+  await page.waitForTimeout(300);
+  await advanceAll(page);
+  await page.waitForTimeout(250);
+  await mark("看完门缝/门牌");
 
-  // 左边窗台：这一处给两条线索（看见印子 + 想起接水要刷卡）
-  await approach(page, 95);
-  await mark("窗台");
+  // ---- 问朱里：每人 3 个问题；关键问题先问（这时还没看到窗台 → 验「问在看见之前」）
+  await approach(page, 238);
+  await waitHint(page, "问问朱里");
+  await page.keyboard.press("KeyE");
+  await page.waitForTimeout(300);
+  let ask = await page.evaluate(() => ({
+    open: !document.getElementById("askBox").hidden,
+    people: document.querySelectorAll("#askBtns button[data-who]").length,
+    dlg: window.DAILY.dialogOpen()
+  }));
+  if (!ask.open) fail("G02 站在朱里跟前按 E 没打开问人面板");
+  if (ask.people !== 2) fail(`G02 问人面板应该有两个人可选，实际 ${ask.people}`);
+  if (ask.dlg) fail("G02 问人面板和完整对白框同时挂着");
+  await noOverlap(page, "#askBox", "#reactBtn", "G02 问人");
+  const bx = (await S(page)).boy;
+  await page.keyboard.down("KeyD");
+  await page.waitForTimeout(340);
+  await page.keyboard.up("KeyD");
+  if (Math.abs((await S(page)).boy - bx) > 1) fail("G02 问人面板打开的时候人物还能走");
+  await page.click('#askBtns button[data-who="girl"]');
+  await page.waitForTimeout(150);
+  const qn = await page.evaluate(() => document.querySelectorAll("#askBtns button[data-q]").length);
+  if (qn !== 3) fail(`G02 朱里应该有 3 个问题，实际 ${qn} 个`);
+  await page.click('#askBtns button[data-q="1"]');   // 关键问题：上午去过开水房吗
+  await page.waitForTimeout(250);
+  g = await G2();
+  const askClues = g.clues.filter((c) => c.kind === "ask");
+  if (askClues.length !== 1) fail(`G02 问了一句，ask 类线索应该有 1 条，实际 ${askClues.length}`);
+  else if (!askClues[0].from || askClues[0].from.indexOf("朱里") < 0) fail("G02 的 ask 线索没标明问的是谁");
+  const said = await page.evaluate(() => document.getElementById("askSaid").textContent);
+  if (!said) fail("G02 问了之后没有答案文本");
+  // 再问一句卡套颜色：答案钉在监控，是地图上的干扰项
+  await page.click('#askBtns button[data-q="2"]');
+  await page.waitForTimeout(200);
+  await page.click('#askBtns button[data-close="1"]');
+  await page.waitForTimeout(300);
+  // 再问由乃：问一个非关键问题（牌子看过了，E 直接是「问人」）
+  await approach(page, 186);
+  await waitHint(page, "问问由乃");
+  await page.keyboard.press("KeyE");
+  await page.waitForTimeout(300);
+  await page.click('#askBtns button[data-who="friend"]');
+  await page.waitForTimeout(150);
+  await page.click('#askBtns button[data-q="0"]');
+  await page.waitForTimeout(200);
+  await page.click('#askBtns button[data-close="1"]');
+  await page.waitForTimeout(300);
+  g = await G2();
+  if (g.askOpen) fail("G02 点「先不问」之后问人面板没关");
+  if (g.clues.filter((c) => c.kind === "ask").length !== 3) fail("G02 问了三句，ask 线索应该有 3 条");
+  if (g.steps !== stepMark) fail("G02 在教室门口问人不该算跨场景步数");
+  ok("G02 问人：两个人各 3 个问题，答案产出 ask 类线索，不限次数、不扣分");
+
+  // ---- 看窗台：朱里的印证版应该已经生效（问在看见之前）
+  await approach(page, P.sill.x);
   await waitHint(page, "窗台");
   await page.keyboard.press("KeyE");
   await page.waitForTimeout(300);
   await advanceAll(page);
   await page.waitForTimeout(250);
+  g = await G2();
+  const confGirl = round.confirms.find((c) => c.who === "girl");
+  const tGirl = g.clues.find((c) => c.point === confGirl.point && c.pin === confGirl.pin && c.kind !== "ask");
+  if (!tGirl) fail(`G02 没收集到朱里印证版对应的线索 ${confGirl.point}/${confGirl.pin}`);
+  else if (tGirl.text !== confGirl.text) fail("G02 问过关键问题后，观察点线索没有换成印证版");
+  else ok("G02 问在看见之前 → 对应观察点线索直接是印证版");
 
-  // 线索本
+  // ---- 去楼梯口看扶手（这一轮的真线索点），步数 +1
+  await ensureScene(page, "stair", "KeyA");
+  await page.waitForFunction((want) => {
+    const x = window.__daily.current;
+    return !!x && x.steps >= want;
+  }, stepMark + 1, { timeout: 8000 }).catch(() => {});
+  g = await G2();
+  if (g.steps !== stepMark + 1) fail(`G02 换场一次 steps 应从 ${stepMark} 到 ${stepMark + 1}，实际 ${g.steps}`);
+  stepMark = g.steps;
+  await mark("到楼梯口");
+  await approach(page, 120);
+  await waitHint(page, "扶手");
+  await page.keyboard.press("KeyE");
+  await page.waitForTimeout(300);
+  await advanceAll(page);
+  await page.waitForTimeout(250);
+
+  // ---- 回走廊问由乃的关键问题（先看到、后问到 → 已有线索要换成印证版）
+  await ensureScene(page, "corridor", "KeyD");
+  await page.waitForFunction((want) => {
+    const x = window.__daily.current;
+    return !!x && x.steps >= want;
+  }, stepMark + 1, { timeout: 8000 }).catch(() => {});
+  g = await G2();
+  if (g.steps !== stepMark + 1) fail(`G02 换回走廊 steps 不对：${g.steps} vs ${stepMark + 1}`);
+  stepMark = g.steps;
+  await approach(page, 186);
+  await waitHint(page, "问问由乃");
+  await page.keyboard.press("KeyE");
+  await page.waitForTimeout(300);
+  await page.click('#askBtns button[data-who="friend"]');
+  await page.waitForTimeout(150);
+  const confFriend = round.confirms.find((c) => c.who === "friend");
+  await page.click(`#askBtns button[data-q="${confFriend.q}"]`);
+  await page.waitForTimeout(250);
+  g = await G2();
+  const tFriend = g.clues.find((c) => c.point === confFriend.point && c.pin === confFriend.pin && c.kind !== "ask");
+  if (!tFriend) fail(`G02 没找到由乃印证版对应的线索 ${confFriend.point}/${confFriend.pin}`);
+  else if (tFriend.text !== confFriend.text) fail("G02 看到之后再问关键问题，已有线索没有换成印证版");
+  else ok("G02 问在看见之后 → 已收集的线索也换成印证版");
+  await page.click('#askBtns button[data-close="1"]');
+  await page.waitForTimeout(300);
+
+  // ---- 线索本：四类线索齐全（ask 是第四类），三级提示也按这一轮改口
   await page.keyboard.press("Tab");
   await page.waitForTimeout(320);
   const nb = await page.evaluate(() => ({
@@ -1375,70 +2522,56 @@ async function runSearch(page) {
     n: document.querySelectorAll("#nbList li").length,
     see: document.querySelectorAll("#nbList li.k-see").length,
     rem: document.querySelectorAll("#nbList li.k-rem").length,
+    gue: document.querySelectorAll("#nbList li.k-gue").length,
+    ask: document.querySelectorAll("#nbList li.k-ask").length,
+    legend: document.querySelector("#nb .nb-legend").textContent,
     badge: document.getElementById("nbBtn").textContent
   }));
-  if (!nb.open) fail("按 Tab 没打开线索本");
-  if (nb.n !== 3) fail(`看过两处，线索本里却有 ${nb.n} 条`);
-  if (nb.see !== 2) fail(`线索本里「亲眼看见」${nb.see} 条，应该是 2 条`);
-  if (nb.rem !== 1) fail(`线索本里「我记得」${nb.rem} 条，应该是 1 条`);
-  if (nb.badge.indexOf("3") < 0) fail(`线索本入口上写的是「${nb.badge.trim()}」，应该是 3`);
+  if (!nb.open) fail("G02 按 Tab 没打开线索本");
+  g = await G2();
+  if (nb.n !== g.clues.length) fail(`G02 线索本里 ${nb.n} 条，实际收集 ${g.clues.length} 条`);
+  if (nb.see !== 2 || nb.rem !== 1 || nb.gue !== 1) {
+    fail(`G02 线索分类数量不对：see ${nb.see} / rem ${nb.rem} / gue ${nb.gue}`);
+  }
+  if (nb.ask !== 4) fail(`G02 线索本里「问到的」${nb.ask} 条，应该是 4 条`);
+  if (nb.legend.indexOf("问到的") < 0) fail("G02 线索本图例里没有「问到的」");
+  if (nb.badge.indexOf(String(g.clues.length)) < 0) fail(`G02 线索本入口上的数字不对：${nb.badge.trim()}`);
   await page.screenshot({ path: path.join(OUT, "s4-notebook.png") });
 
   // 线索本打开的时候人不能走
-  const bx = (await S(page)).boy;
+  const bx2 = (await S(page)).boy;
   await page.keyboard.down("KeyD");
   await page.waitForTimeout(340);
   await page.keyboard.up("KeyD");
-  if (Math.abs((await S(page)).boy - bx) > 1) fail("线索本打开的时候人物还能走");
+  if (Math.abs((await S(page)).boy - bx2) > 1) fail("G02 线索本打开的时候人物还能走");
 
-  // 三级提示：一次比一次具体，第三次之后按钮不能再按
+  // 三级提示：前两条不变，第三条按这一轮落点改口；问完之后按钮禁用
   await page.click("#nbHint");
   await page.waitForTimeout(280);
   const m1 = await page.evaluate(() => document.getElementById("msg").textContent);
-  if (!m1 || m1.indexOf("出去过一次") < 0) fail(`第一次问由乃，消息是「${m1}」`);
+  if (!m1 || m1.indexOf("出去过一次") < 0) fail(`G02 第一次问由乃，消息是「${m1}」`);
   if (!(await page.evaluate(() => document.getElementById("msg").classList.contains("show")))) {
-    fail("问了由乃，消息条没显示出来");
+    fail("G02 问了由乃，消息条没显示出来");
   }
   await page.screenshot({ path: path.join(OUT, "s6-msg.png") });
   await page.click("#nbHint");
   await page.waitForTimeout(280);
   const m2 = await page.evaluate(() => document.getElementById("msg").textContent);
-  if (!m2 || m2 === m1) fail("第二次问由乃，消息没变");
+  if (!m2 || m2 === m1) fail("G02 第二次问由乃，消息没变");
   await page.click("#nbHint");
   await page.waitForTimeout(280);
+  const m3 = await page.evaluate(() => document.getElementById("msg").textContent);
+  if (m3 !== "由乃" + round.hint3) {
+    fail(`G02 第三条提示没有按落点改口：「${round.hint3}」，实际「${m3}」`);
+  }
   const asked = await page.evaluate(() => document.getElementById("nbHint").disabled);
-  if (!asked) fail("三级提示都问完了，按钮还可以按");
+  if (!asked) fail("G02 三级提示都问完了，按钮还可以按");
   await page.keyboard.press("Tab");
   await page.waitForTimeout(280);
 
-  // 楼梯口扶手 —— 唯一一条「猜的」
-  s = await ensureScene(page, "stair", "KeyA");
-  await mark("换场景后");
-  await page.waitForTimeout(200);
-  await approach(page, 120);
-  await mark("到扶手");
-  // 按 E 之前先确认提示条真的是「扶手」。不然一旦人站偏了，
-  // E 会点到别的东西上，最后只报一句「线索少一条」，看不出是哪一步错的。
-  await waitHint(page, "扶手");
-  if ((await S(page)).scene !== "stair") fail("走到扶手那儿，场景却不是楼梯口");
-  await page.keyboard.press("KeyE");
-  await page.waitForTimeout(300);
-  await advanceAll(page);
-  await page.waitForTimeout(250);
-
+  // ---- 在地图上想想：挑证据、站号、多一站、顺序、拼对
   await page.keyboard.press("Tab");
-  await page.waitForTimeout(320);
-  const gue = await page.evaluate(() => ({
-    n: document.querySelectorAll("#nbList li").length,
-    gue: document.querySelectorAll("#nbList li.k-gue").length
-  }));
-  if (gue.n !== 4) fail(`看过三处，线索本里却有 ${gue.n} 条`);
-  if (gue.gue !== 1) fail(`「我猜的」那一类有 ${gue.gue} 条，应该是 1 条`);
-  await page.screenshot({ path: path.join(OUT, "s5-guess.png") });
-
-  // 在地图上想想：先钉两站看线跟着画、站号跟着编；
-  // 再把「猜的」那条也钉上 → 多了一站；取消它、打乱顺序 → 顺序不对；
-  // 最后按教室 → 饮水机 → 窗台钉对。拼错不拦路，拼对才存 searchRouteSolved。
+  await page.waitForTimeout(280);
   await page.click("#nbMap");
   await page.waitForTimeout(320);
   const map0 = await page.evaluate(() => ({
@@ -1447,10 +2580,10 @@ async function runSearch(page) {
     badges: document.querySelectorAll("#map .spot .cnt:not([hidden])").length,
     nbHidden: document.getElementById("nb").hidden
   }));
-  if (!map0.open) fail("线索本里点「在地图上想想」没打开平面图");
-  if (map0.spots !== 7) fail(`平面图上有 ${map0.spots} 个可点地点，应该是 7 个`);
-  if (map0.badges < 3) fail(`平面图上只有 ${map0.badges} 个地点挂着线索角标`);
-  if (!map0.nbHidden) fail("打开平面图时线索本还挂在上头");
+  if (!map0.open) fail("G02 线索本里点「在地图上想想」没打开平面图");
+  if (map0.spots !== 7) fail(`G02 平面图上有 ${map0.spots} 个可点地点，应该是 7 个`);
+  if (map0.badges < 3) fail(`G02 平面图上只有 ${map0.badges} 个地点挂着线索角标`);
+  if (!map0.nbHidden) fail("G02 打开平面图时线索本还挂在上头");
   await page.screenshot({ path: path.join(OUT, "s7-map.png") });
 
   // 地图打开时人不能走
@@ -1458,10 +2591,10 @@ async function runSearch(page) {
   await page.keyboard.down("KeyD");
   await page.waitForTimeout(340);
   await page.keyboard.up("KeyD");
-  if (Math.abs((await S(page)).boy - mx) > 1) fail("平面图打开的时候人物还能走");
+  if (Math.abs((await S(page)).boy - mx) > 1) fail("G02 平面图打开的时候人物还能走");
 
-  // 钉地点之前先挑一句证据。证据和地点对不上就钉不上，面板也不关。
-  async function pinSpot(spot, evidence) {
+  // 钉地点之前先挑一句证据；证据和地点对不上就钉不上，面板也不关。
+  async function pinSpot(spot, wantText) {
     await page.click(`#map .spot[data-spot="${spot}"]`);
     await page.waitForTimeout(150);
     const picked = await page.evaluate((want) => {
@@ -1470,25 +2603,31 @@ async function runSearch(page) {
       if (!b) return false;
       b.click();
       return true;
-    }, evidence);
-    await page.waitForTimeout(170);
-    if (!picked) fail(`钉「${spot}」的时候，线索里找不到「${evidence}」`);
+    }, wantText);
+    await page.waitForTimeout(180);
+    if (!picked) fail(`G02 钉「${spot}」的时候，线索里找不到「${wantText}」`);
   }
+  const clueWithPin = (pin) => g.clues.find((c) => c.pin === pin && c.kind !== "ask");
+  const c1 = clueWithPin(round.route[0]);
+  const c2 = clueWithPin(round.route[1]);
+  const c3 = clueWithPin(round.route[2]);
+  const decoy = g.clues.find((c) => c.pin === "cctv");
+  if (!c1 || !c2 || !c3) fail("G02 路线上三站的线索没有都收集到");
+  if (!decoy) fail("G02 没有监控那条干扰线索");
 
-  // 先故意拿教室的线索去钉饮水机：不该钉上，线索也不能被吃掉
-  await page.click('#map .spot[data-spot="cooler"]');
+  // 先拿监控那条 ask 线索去钉教室：不该钉上，线索也不能被吃掉
+  await page.click('#map .spot[data-spot="classroom"]');
   await page.waitForTimeout(150);
   const pickOpen = await page.evaluate(() => ({
     open: !document.getElementById("mapPick").hidden,
-    n: document.querySelectorAll("#mapPickList button").length,
-    said: document.getElementById("mapSaid").textContent
+    n: document.querySelectorAll("#mapPickList button").length
   }));
-  if (!pickOpen.open) fail("点地点之后没有摊出线索让你挑");
-  if (pickOpen.n < 4) fail(`挑证据的列表里只有 ${pickOpen.n} 条线索`);
+  if (!pickOpen.open) fail("G02 点地点之后没有摊出线索让你挑");
+  if (pickOpen.n < 3) fail(`G02 挑证据的列表里只有 ${pickOpen.n} 条线索`);
   await page.screenshot({ path: path.join(OUT, "s7a-map-pick.png") });
   await page.evaluate(() => {
     const b = [...document.querySelectorAll("#mapPickList button")]
-      .find((x) => x.textContent.indexOf("教室里的桌子没收") >= 0);
+      .find((x) => x.textContent.indexOf("监控") >= 0);
     if (b) b.click();
   });
   await page.waitForTimeout(200);
@@ -1498,74 +2637,78 @@ async function runSearch(page) {
     said: document.getElementById("mapSaid").textContent,
     open: !document.getElementById("mapPick").hidden
   }));
-  if (wrongEv.pins !== 0) fail("证据和地点对不上，地点却钉上了");
-  if (wrongEv.pick !== "cooler" || !wrongEv.open) fail("证据挑错之后挑证据的面板关了");
-  if (wrongEv.said.indexOf("别的地方") < 0) fail(`证据挑错之后地图说「${wrongEv.said}」`);
+  if (wrongEv.pins !== 0) fail("G02 证据和地点对不上，地点却钉上了");
+  if (wrongEv.pick !== "classroom" || !wrongEv.open) fail("G02 证据挑错之后挑证据的面板关了");
+  if (wrongEv.said.indexOf("别的地方") < 0) fail(`G02 证据挑错之后地图说「${wrongEv.said}」`);
   await page.screenshot({ path: path.join(OUT, "s7a2-map-wrong-clue.png") });
   await page.click("#mapPickClose");
   await page.waitForTimeout(160);
 
   // 钉到第二站：线先按钉的先后画出来，站号也跟着编
-  await pinSpot("classroom", "教室里的桌子没收");
-  await pinSpot("cooler", "卡她只在接水的时候");
+  await pinSpot(round.route[0], c1.text);
+  await pinSpot(round.route[1], c2.text);
   const sketch = await page.evaluate(() => ({
     pts: document.getElementById("mapRoute").getAttribute("points"),
     drawing: document.getElementById("map").classList.contains("drawing"),
-    ords: [...document.querySelectorAll("#map .spot .ord:not([hidden])")].map((o) => o.textContent)
+    ords: [...document.querySelectorAll("#map .spot .ord:not([hidden])")].map((o) => o.textContent),
+    pins: window.__daily.current.pins.join(",")
   }));
-  if (!sketch.pts || !sketch.drawing) fail("钉到第二站，地图上没有先连一条线");
-  if (sketch.ords.join(",") !== "1,2") fail(`钉了两站，站号是 ${sketch.ords.join(",")}，应该是 1,2`);
+  if (!sketch.pts || !sketch.drawing) fail("G02 钉到第二站，地图上没有先连一条线");
+  if (sketch.ords.join(",") !== "1,2") fail(`G02 钉了两站，站号是 ${sketch.ords.join(",")}，应该是 1,2`);
+  if (sketch.pins !== round.route.slice(0, 2).join(",")) fail(`G02 钉了两站，实际钉的是 ${sketch.pins}`);
 
-  await pinSpot("windowsill", "左边窗台的灰里");
-  await pinSpot("stair", "扶手上有一道没干的白灰");
+  // 多钉一站（监控）→ 只提示「多了一站」，不拦路
+  await pinSpot("cctv", decoy.text);
+  await pinSpot(round.route[2], c3.text);
   await page.click("#mapCheck");
   await page.waitForTimeout(250);
-  const wrong = await page.evaluate(() => ({
+  const over = await page.evaluate(() => ({
     said: document.getElementById("mapSaid").textContent,
     solved: window.__daily.current.routeSolved,
     tries: window.__daily.current.routeTries,
-    saved: window.__daily.store().searchRouteSolved === true,
     line: document.getElementById("mapRoute").getAttribute("points"),
     drawn: document.getElementById("map").classList.contains("solved")
   }));
-  if (wrong.solved) fail("钉了四站（含猜的那条）居然判成拼对了");
-  if (wrong.said.indexOf("多了一站") < 0) fail(`拼错之后地图说「${wrong.said}」，没有「多了一站」`);
-  if (wrong.tries !== 1) fail(`拼错一次，routeTries 是 ${wrong.tries}`);
-  if (wrong.saved) fail("拼错也存下了 searchRouteSolved");
-  if (!wrong.line) fail("钉了四站，玩家连的线却没画出来");
-  if (wrong.drawn) fail("拼错的时候地图却亮成拼对的样子");
+  if (over.solved) fail("G02 钉了四站（含监控）居然判成拼对了");
+  if (over.said.indexOf("多了一站") < 0) fail(`G02 多钉一站之后地图说「${over.said}」`);
+  if (over.tries !== 1) fail(`G02 拼错一次，routeTries 是 ${over.tries}`);
+  if (!over.line) fail("G02 钉了四站，玩家连的线却没画出来");
+  if (over.drawn) fail("G02 拼错的时候地图却亮成拼对的样子");
   await page.screenshot({ path: path.join(OUT, "s7b-map-wrong.png") });
+  await page.click('#map .spot[data-spot="cctv"]');       // 去掉多出来的一站
 
-  // 取消多出来的一站，再把顺序打乱：教室挪到最后一个。
-  // 取消时证据要放回线索池，重新钉教室还得找得到那句教室的线索。
-  await page.click('#map .spot[data-spot="stair"]');
-  await page.click('#map .spot[data-spot="classroom"]');   // 取消
-  await pinSpot("classroom", "教室里的桌子没收");            // 重新钉，排到最后
+  // 打乱顺序：前两站互换 → 只提示「顺序不对」
+  for (const id of round.route) {
+    await page.click(`#map .spot[data-spot="${id}"]`);
+    await page.waitForTimeout(80);
+  }
+  await pinSpot(round.route[1], c2.text);
+  await pinSpot(round.route[0], c1.text);
+  await pinSpot(round.route[2], c3.text);
   await page.click("#mapCheck");
   await page.waitForTimeout(250);
-  const order = await page.evaluate(() => ({
+  const wrongOrder = await page.evaluate(() => ({
     said: document.getElementById("mapSaid").textContent,
     solved: window.__daily.current.routeSolved,
     pins: window.__daily.current.pins.join(","),
-    evidence: window.__daily.current.evidence,
     saved: window.__daily.store().searchRouteSolved === true
   }));
-  if (order.solved) fail("三站集合一样、顺序反了，居然判成拼对了");
-  if (order.said.indexOf("顺序") < 0) fail(`顺序错的时候地图说「${order.said}」，没提顺序`);
-  if (order.pins !== "cooler,windowsill,classroom") fail(`打乱之后的钉子是 ${order.pins}`);
-  if (!order.evidence.classroom || order.evidence.classroom.text.indexOf("教室里的桌子没收") < 0) {
-    fail("取消再钉之后，教室那句证据没跟着回来");
+  if (wrongOrder.solved) fail("G02 三站集合一样、顺序反了，居然判成拼对了");
+  if (wrongOrder.said.indexOf("顺序") < 0) fail(`G02 顺序错的时候地图说「${wrongOrder.said}」`);
+  if (wrongOrder.pins !== [round.route[1], round.route[0], round.route[2]].join(",")) {
+    fail(`G02 打乱之后的钉子是 ${wrongOrder.pins}`);
   }
-  if (order.saved) fail("顺序错了也存下了 searchRouteSolved");
+  if (wrongOrder.saved) fail("G02 顺序错了也存下了 searchRouteSolved");
   await page.screenshot({ path: path.join(OUT, "s7b2-map-order.png") });
 
-  // 全部取消，再按她走过的先后钉：教室 → 饮水机 → 窗台
-  for (const id of ["cooler", "windowsill", "classroom"]) {
+  // 全部取消，再按她走过的先后钉：教室 → 饮水机 → 楼梯
+  for (const id of [round.route[1], round.route[0], round.route[2]]) {
     await page.click(`#map .spot[data-spot="${id}"]`);
+    await page.waitForTimeout(80);
   }
-  await pinSpot("classroom", "教室里的桌子没收");
-  await pinSpot("cooler", "卡她只在接水的时候");
-  await pinSpot("windowsill", "左边窗台的灰里");
+  await pinSpot(round.route[0], c1.text);
+  await pinSpot(round.route[1], c2.text);
+  await pinSpot(round.route[2], c3.text);
   await page.click("#mapCheck");
   await page.waitForTimeout(300);
   const right = await page.evaluate(() => ({
@@ -1578,14 +2721,15 @@ async function runSearch(page) {
     check: document.getElementById("mapCheck").disabled,
     obj: document.getElementById("objSub").textContent
   }));
-  if (!right.solved) fail("三站按顺序钉对了，routeSolved 还是 false");
-  if (right.said.indexOf("那就是这条") < 0) fail(`拼对之后地图说「${right.said}」`);
-  if (right.pins !== "classroom,cooler,windowsill") fail(`拼对的钉子和顺序是 ${right.pins}`);
-  if (!right.saved) fail("拼对之后没有存下 searchRouteSolved");
-  if (!right.line || right.line !== "52,27 102,73 37,73") fail(`拼对之后地图上的线是「${right.line}」`);
-  if (!right.drawn) fail("拼对之后地图上的线没亮");
-  if (!right.check) fail("拼对之后「看看这条线」还能再按");
-  if (right.obj.indexOf("楼梯口") < 0) fail(`拼对之后目标卡没改口：「${right.obj}」`);
+  const wantLine = round.route.map((id) => round.spots[id].x + "," + round.spots[id].y).join(" ");
+  if (!right.solved) fail("G02 三站按顺序钉对了，routeSolved 还是 false");
+  if (right.said.indexOf("那就是这条") < 0) fail(`G02 拼对之后地图说「${right.said}」`);
+  if (right.pins !== round.route.join(",")) fail(`G02 拼对的钉子和顺序是 ${right.pins}`);
+  if (!right.saved) fail("G02 拼对之后没有存下 searchRouteSolved");
+  if (!right.line || right.line !== wantLine) fail(`G02 拼对之后地图上的线是「${right.line}」`);
+  if (!right.drawn) fail("G02 拼对之后地图上的线没亮");
+  if (!right.check) fail("G02 拼对之后「看看这条线」还能再按");
+  if (right.obj.indexOf(round.destName) < 0) fail(`G02 拼对之后目标卡没改口：「${right.obj}」`);
   await page.screenshot({ path: path.join(OUT, "s7c-map-solved.png") });
 
   await page.click("#mapClose");
@@ -1594,43 +2738,133 @@ async function runSearch(page) {
     open: !document.getElementById("map").hidden,
     state: window.__daily.current.state
   }));
-  if (closed.open) fail("点「合上」之后平面图还挂着");
-  if (closed.state !== "search") fail(`合上平面图之后状态是 ${closed.state}`);
+  if (closed.open) fail("G02 点「合上」之后平面图还挂着");
+  if (closed.state !== "search") fail(`G02 合上平面图之后状态是 ${closed.state}`);
 
-  // 地图是从线索本里打开的，线索本已经先合上了；这里只确认没有别的面板还挡路
+  // ---- 去楼梯口把卡捡起来（这一轮卡在台阶上，拼对过路线 → 第二句「果然」）
   await page.keyboard.press("Escape");
   await page.waitForTimeout(200);
-  await approach(page, 300);
-  await mark("回到窗台");
-  await waitHint(page, "窗台");
+  g = await G2();
+  const clueN = g.clues.length;
+  const hintN = g.hints;
+  await ensureScene(page, "stair", "KeyA");
+  await page.waitForFunction((want) => {
+    const x = window.__daily.current;
+    return !!x && x.steps >= want;
+  }, stepMark + 1, { timeout: 8000 }).catch(() => {});
+  g = await G2();
+  if (g.steps !== stepMark + 1) fail(`G02 去楼梯口捡卡 steps 应从 ${stepMark} 到 ${stepMark + 1}，实际 ${g.steps}`);
+  else ok(`G02 步数统计与自动行走一致（累计 ${g.steps} 次换场）`);
+  stepMark = g.steps;
+  await mark("去捡卡");
+  await approach(page, g.cardSpot.x);
+  await waitHint(page, g.cardSpot.findHint.replace("E · ", "").slice(0, 3));
   await page.keyboard.press("KeyE");
   await page.waitForTimeout(500);
-  // 拼对过路线，捡卡时的第二句应该是「果然在这儿」
   await page.keyboard.press("KeyE");
   await page.waitForTimeout(260);
   const foundLine = await page.evaluate(() => document.getElementById("line").textContent);
-  if (foundLine.indexOf("果然") < 0) fail(`拼对之后捡卡，第二句是「${foundLine}」，没有「果然」`);
+  if (foundLine.indexOf("果然") < 0) fail(`G02 拼对之后捡卡，第二句是「${foundLine}」，没有「果然」`);
+  await page.screenshot({ path: path.join(OUT, "s2-found.png") });
+
   // 这一遍故意不选「怎么还给她」：6 秒后要自己往下走，不能拦关。
   if (!(await drainToGiveBack(page))) fail("G02 第二遍没有出现「怎么还给她」");
+  await page.screenshot({ path: path.join(OUT, "s2b-return.png") });
   await page.waitForFunction(() => document.getElementById("giveBack").hidden,
     null, { timeout: 9000 }).catch(() => fail("G02 不选「怎么还」时卡住了"));
-  const rc = await page.evaluate(() => {
-    const g = window.__daily.current;
-    return g ? g.returnChoice : null;
+  const rc2 = await page.evaluate(() => {
+    const x = window.__daily.current;
+    return x ? x.returnChoice : null;
   });
-  if (rc !== null && rc !== -1) fail(`G02 故意不选，returnChoice 却是 ${rc}`);
-  await drain(page, 16000);
+  if (rc2 !== null && rc2 !== -1) fail(`G02 故意不选，returnChoice 却是 ${rc2}`);
+  // 一边读收尾一边记台词：步数评价只在措辞里。
+  const tailLines = [];
+  const tailT0 = Date.now();
+  while (Date.now() - tailT0 < 18000) {
+    const st = await page.evaluate(() => ({
+      hub: document.getElementById("hub").classList.contains("show"),
+      dlg: window.DAILY.dialogOpen(),
+      who: document.getElementById("who").textContent,
+      line: document.getElementById("line").textContent
+    }));
+    if (st.hub) break;
+    if (st.dlg) {
+      tailLines.push(st.who + "：" + st.line);
+      await page.keyboard.press("KeyE");
+      await page.waitForTimeout(85);
+    } else await page.waitForTimeout(120);
+  }
+  if (!tailLines.some((x) => x.indexOf("心里有谱") >= 0)) {
+    fail(`G02 这一遍只走了 ${stepMark} 次换场，收尾应该是少步数口径（实际：${tailLines.join(" | ")}）`);
+  }
 
   const done = await page.evaluate(() => ({
     hub: document.getElementById("hub").classList.contains("show"),
     saved: window.__daily.store().searchCompleted === true,
     clues: window.__daily.store().searchClues,
-    hints: window.__daily.store().searchHints
+    hints: window.__daily.store().searchHints,
+    runs: window.__daily.store().searchRuns,
+    routeSolved: window.__daily.store().searchRouteSolved
   }));
   if (!done.hub) fail("G02 找完没有回到目录");
   if (!done.saved) fail("G02 找完没有存下 searchCompleted");
-  if (done.clues !== 4) fail(`看了三处（窗台给两条），存档里是 ${done.clues} 条 ｜ 轨迹：${trace.join(" → ")}`);
-  if (done.hints !== 3) fail(`问了三次提示，存档里是 ${done.hints}`);
+  if (done.clues !== clueN) {
+    fail(`G02 存档里的线索数 ${done.clues} 和线索本 ${clueN} 不一致 ｜ 轨迹：${trace.join(" → ")}`);
+  }
+  if (done.hints !== 3) fail(`G02 问了三次提示，存档里是 ${done.hints}`);
+  if (done.hints !== hintN) fail("G02 存档里的提示次数和游戏内对不上");
+  if (done.runs !== 2) fail(`G02 第二次通关后 searchRuns 应该是 2，实际 ${done.runs}`);
+  if (done.routeSolved !== true) fail("G02 拼对路线没落盘");
+  await page.screenshot({ path: path.join(OUT, "s8-hub.png") });
+
+  // ================= 旧存档兼容：searchClues 等旧键读入不报错 =================
+  // 单开一个浏览器上下文来装旧存档，不污染主页面已经跑出来的存档。
+  const oldSave = {
+    errandCompleted: true, soloJurieCompleted: true,
+    searchCompleted: true, searchClues: 4, searchHints: 2, searchRouteSolved: false,
+    soloYunoCompleted: true, wordGameCompleted: true, wordGameCorrect: 7, wordGameHints: 2,
+    ballGameCompleted: true, chapterDailyDone: true
+  };
+  const oldBrowser = await chromium.launch({ channel: "chrome" });
+  const p2 = await oldBrowser.newPage({ viewport: { width: 1280, height: 720 } });
+  const p2errors = [];
+  p2.on("pageerror", (e) => p2errors.push("pageerror: " + e.message));
+  p2.on("console", (m) => { if (m.type() === "error") p2errors.push("console: " + m.text()); });
+  await p2.addInitScript((data) => {
+    localStorage.setItem("our-story-act5-daily-v1", JSON.stringify(data));
+  }, oldSave);
+  await p2.goto(PAGE, { waitUntil: "load", timeout: 60000 });
+  await p2.waitForFunction(() => window.__daily && window.__daily.events, null, { timeout: 30000 });
+  await p2.waitForTimeout(1200);
+  const oldOk = await p2.evaluate(() => {
+    const st = window.__daily.store();
+    return {
+      hub: !document.getElementById("hub").hidden,
+      clues: st.searchClues, hints: st.searchHints,
+      runs: st.searchRuns, errandRuns: st.errandRuns, words: st.wordGameCorrect
+    };
+  });
+  if (!oldOk.hub) fail("G02 旧存档读入后目录没出来");
+  if (oldOk.clues !== 4 || oldOk.hints !== 2) fail("G02 旧存档的 searchClues / searchHints 没保留");
+  if (oldOk.words !== 7) fail("G02 旧存档的 wordGameCorrect 没保留");
+  if (oldOk.runs !== undefined || oldOk.errandRuns !== undefined) {
+    fail("G02 旧存档没有新的游玩次计数，读进来应该是缺省（不写脏值）");
+  }
+  // 旧存档下再进一次：游玩次从 0 起，首通参数不报错
+  await p2.click('#hubList li[data-id="search"]');
+  await p2.waitForTimeout(1400);
+  const p2start = await p2.evaluate(() => {
+    const x = window.__daily.current;
+    return x ? { state: x.state, runs: x.runs, spot: x.round.spot.id } : null;
+  });
+  if (!p2start || (p2start.state !== "intro" && p2start.state !== "search")) {
+    fail("G02 旧存档下再进游戏起不来");
+  } else if (p2start.runs !== 0 || p2start.spot !== "stairSill") {
+    fail(`G02 旧存档下第一次游玩不是首通参数：runs ${p2start.runs} / ${p2start.spot}`);
+  }
+  if (p2errors.length) fail("G02 旧存档读入报错：" + p2errors.slice(0, 3).join(" | "));
+  else ok("G02 旧存档（searchClues / searchHints 等）读入不报错，首通参数从 0 起");
+  await oldBrowser.close();
   return done;
 }
 
@@ -1675,6 +2909,7 @@ async function runBall(page) {
       charging: g && g.charging, power: g && g.power,
       aimAng: g && g.aimAng, aimX: g && g.aimX, aimZ: g && g.aimZ,
       aiSteal: g && g.aiSteal,
+      keeper: g && g.keeper, roles: g && g.roles, ballOffFoot: g && g.ballOffFoot,
       stats: g && g.stats, calls: g && g.calls,
       keys: Object.keys(window.DAILY.keys).filter((k) => window.DAILY.keys[k]),
       config: g && g.config,
@@ -1800,17 +3035,25 @@ async function runBall(page) {
     return null;
   }
 
-  // 玩家的进攻脚本：断球后往远处带，蓄力时 W 抬高、A 把角度往左转，松手射门。
+  // 玩家的进攻脚本：断球后往远处带；到射程里蓄高球（§6.5 三把锁下的正解——
+  // 守门员只扑 z1 < 0.50 的低球，高球从她头上过去）。顺带记下守门状态机。
   async function playWin(timeoutMs) {
     const h = keyHolder();
     let last = null;
     let goalsSeen = 0;
+    let sawKeeper = false, keeperAt = null, sawRoles = null;
+    let shotTries = 0;
     const t0 = Date.now();
     try {
       while (Date.now() - t0 < timeoutMs) {
         const q = await B();
         if (q.id) last = q;
         if (!q.id) break;
+        if (q.keeper && q.keeper.active) {
+          sawKeeper = true;
+          if (keeperAt == null) keeperAt = { d: q.me.d, who: q.keeper.who };
+        }
+        if (q.roles) sawRoles = q.roles;
         if (q.state === "rest" || q.state === "done") break;
         if (q.dlg) { await h.clear(); await advanceAll(page); continue; }
         if (q.state === "goalPause") {
@@ -1835,7 +3078,7 @@ async function runBall(page) {
 
         if (q.holder === "me") {
           if (q.stumbleT > 0) { await h.clear(); await page.waitForTimeout(50); continue; }
-          if (q.me.d < 0.80) {
+          if (q.me.d < 0.84) {
             const keys = ["KeyW"];
             if (q.me.x < 0.44) keys.push("KeyD");
             else if (q.me.x > 0.56) keys.push("KeyA");
@@ -1846,10 +3089,19 @@ async function runBall(page) {
           await h.clear();
           await page.keyboard.down("Space");
           await page.keyboard.down("KeyW");
-          await page.waitForTimeout(560);
+          // 一直抬到 aimZ ≥ 0.54（高过 keeperLowZ 0.50）再松手；被贴身时蓄力慢，所以看高度不看时间
+          let charged = false;
+          const tShot = Date.now();
+          while (Date.now() - tShot < 2600) {
+            await page.waitForTimeout(60);
+            const c = await B();
+            if (c.holder !== "me" || !c.charging) break;
+            if (c.aimZ >= 0.54) { charged = true; break; }
+          }
           await page.keyboard.up("KeyW");
           await page.keyboard.up("Space");
-          await page.waitForTimeout(120);
+          shotTries++;
+          await page.waitForTimeout(150);
           continue;
         }
 
@@ -1885,7 +3137,7 @@ async function runBall(page) {
     } finally {
       await h.clear();
     }
-    return last;
+    return Object.assign({}, last, { sawKeeper: sawKeeper, keeperAt: keeperAt, sawRoles: sawRoles, shotTries: shotTries });
   }
 
   // 站桩：不碰键，由乃会来把球抢走，再打反击。
@@ -2131,8 +3383,8 @@ async function runBall(page) {
       if (!c2.stats || c2.stats.shots <= beforeShots) {
         fail("G04 松手之后没有记下这一脚射门");
       }
-      if (c2.mode !== "shot" && c2.state !== "goalPause" && c2.holder !== "yuno" &&
-          c2.holder !== "jurie" && c2.holder !== "me") {
+      if (c2.mode !== "shot" && c2.state !== "goalPause" && c2.mode !== "loose" &&
+          c2.holder !== "yuno" && c2.holder !== "jurie" && c2.holder !== "me") {
         fail(`G04 松手之后球的状态是 ${c2.mode}`);
       }
       await page.screenshot({ path: path.join(OUT, "b3b-shot.png") });
@@ -2175,7 +3427,10 @@ async function runBall(page) {
   if (loseEnd.scoreThem !== 3) fail(`G04 玩家站着不动，对面只进了 ${loseEnd.scoreThem} 球，没打完`);
   if (loseEnd.scoreMe >= 3) fail("G04 玩家站着不动还赢了，不可能");
   if (loseEnd.winner !== "them") fail(`G04 站桩局的赢家是 ${loseEnd.winner}，应该是对面`);
-  if (!loseEnd.sawWindup) fail("G04 电脑断球前没有抬手预警（一次都没看到 aiSteal）");
+  // 抬手预警：90ms 轮询可能正好错开 0.32 秒的窗口，所以以整场累计计数为准（sawWindup 也接受）
+  if (!loseEnd.sawWindup && !(loseEnd.stats && loseEnd.stats.aiWindups > 0)) {
+    fail("G04 电脑断球前没有抬手预警（一次都没看到 aiSteal）");
+  }
   const loseBoard = `scoreboard_${loseEnd.scoreMe}_${loseEnd.scoreThem}.png`;
   if (!loseEnd.board || loseEnd.board.indexOf(loseBoard) < 0) {
     fail(`G04 站桩局收尾记分牌不是 ${loseEnd.scoreMe}:${loseEnd.scoreThem}`);
@@ -2225,6 +3480,103 @@ async function runBall(page) {
   if (store2.ballGameCompleted !== true) fail("G04 第二场后 ballGameCompleted 丢了");
   dirty = Object.keys(store2).filter((k) => /score|goal|win|lose/i.test(k));
   if (dirty.length) fail("G04 第二场把比分/胜负写进了存档：" + dirty.join(","));
+
+  // 八、§6.8 确定性自检：__ball 的固定步进、无渲染，20 个种子几秒钟跑完。
+  //     改前基线（同一脚本、改造前的 ball.js）是 20/20 = 100%，所以这条断言就是「一条龙被堵死」。
+  if (!winEnd.sawKeeper) fail("G04 玩家带球进射程后，守门员一次都没进 keeper 态");
+  else if (!winEnd.keeperAt || winEnd.keeperAt.d < 0.61) {
+    fail(`G04 守门员进 keeper 态的时机不对（玩家 d=${winEnd.keeperAt && winEnd.keeperAt.d.toFixed(2)}）`);
+  }
+  if (!winEnd.sawRoles || !winEnd.sawRoles.press || !winEnd.sawRoles.cover) {
+    fail("G04 场上没有防守分工（roles.press / roles.cover）");
+  }
+
+  const simT0 = Date.now();
+  const sim = await page.evaluate(() => {
+    if (!window.__ball || !window.__ball.testRoute) return null;
+    const routes = [];
+    for (let seed = 1; seed <= 20; seed++) routes.push(window.__ball.testRoute(seed));
+    const detA = JSON.stringify(window.__ball.testRoute(7));
+    const detB = JSON.stringify(window.__ball.testRoute(7));
+    return {
+      routes: routes,
+      det: detA === detB,
+      keeper: window.__ball.testKeeper(7),
+      touch: window.__ball.testTouch(3),
+      dash: window.__ball.testDash(3),
+      spread: window.__ball.testSpread(11),
+      scoreLead: window.__ball.testScore(1, 2, 0),
+      scoreTrail: window.__ball.testScore(1, 0, 2),
+      scoreTie: window.__ball.testScore(1, 0, 0)
+    };
+  });
+  const simMs = Date.now() - simT0;
+  if (!sim) fail("G04 没有 window.__ball 确定性测试入口（§6.8 要求固定步进、无渲染）");
+  else {
+    const routes = sim.routes;
+    const goals = routes.filter((r) => r.goal).length;
+    const stuck = routes.filter((r) => r.result === "timeout" || r.result.indexOf("state:") === 0);
+    if (goals / routes.length > 0.30) {
+      fail(`G04 一条龙 20 个种子进了 ${goals} 球（${Math.round(goals / routes.length * 100)}%），应该 ≤30%`);
+    }
+    if (stuck.length) fail(`G04 一条龙自检有 ${stuck.length} 个种子 8 秒都没结果`);
+    if (!sim.det) fail("G04 同一个种子跑两次结果不一致，随机没走本局种子");
+    if (!routes.every((r) => r.keeperSeen)) {
+      fail("G04 一条龙路线里守门员没有每次都进入 keeper 态");
+    }
+    if (!sim.keeper.reached) fail("G04 带球过中线到 d ≥ 0.62 的自检没走到");
+    if (sim.keeper.reached && !sim.keeper.keeperActive) {
+      fail("G04 玩家过中线进入射程后，守线的 cover 没有进 keeper 态");
+    }
+    if (sim.keeper.keeperBefore) fail("G04 玩家还没过中线，守门员就先进门了");
+    if (sim.keeper.roles && (sim.keeper.roles.press !== "yuno" || sim.keeper.roles.cover !== "jurie")) {
+      fail(`G04 防守分工不对：${JSON.stringify(sim.keeper.roles)}`);
+    }
+    const sp = sim.spread;
+    if (sp.zero.x !== 0.42 || sp.zero.z !== 0.31 || sp.zero2.x !== 0.638 || sp.zero2.z !== 0.55) {
+      fail(`G04 σ=0 时射门落点没有严格等于瞄准点（${JSON.stringify(sp.zero)} / ${JSON.stringify(sp.zero2)}）`);
+    }
+    if (!sp.moved) fail("G04 打开散布后出手落点没变，σ 公式没生效");
+    if (!(sp.sigma.high > sp.sigma.low && sp.sigma.far > sp.sigma.low &&
+          sp.sigma.pressed > sp.sigma.low && sp.sigma.high > 0.06)) {
+      fail(`G04 散布公式不随力度 / 距离 / 压迫变化：${JSON.stringify(sp.sigma)}`);
+    }
+    if (!(sim.touch.offFootStill > 0.03) || !sim.touch.stillAhead || sim.touch.sticky) {
+      fail(`G04 球还粘在脚上 / 没停在朝向 0.05 前方：${JSON.stringify(sim.touch)}`);
+    }
+    if (!(sim.touch.turnSlips > 0)) fail("G04 急转 >100°/0.2s 时球没有往外多滑 0.02");
+    if (!sim.dash.loose || !(sim.dash.depth > 0.14 && sim.dash.depth < 0.18) ||
+        !(sim.dash.dashT > 0.3) || !(sim.dash.dashCd > 2.3)) {
+      fail(`G04 Shift 拨球参数不对：${JSON.stringify(sim.dash)}`);
+    }
+    if (sim.scoreLead.pressLead !== 0.45 || sim.scoreLead.keeperErr !== 0.02 ||
+        sim.scoreLead.coverBias !== 0) {
+      fail(`G04 领先两球时没有加强上抢 / 收小守门误差：${JSON.stringify(sim.scoreLead)}`);
+    }
+    if (sim.scoreTrail.coverBias !== 0.04 || sim.scoreTrail.pressLead !== 0.35) {
+      fail(`G04 落后两球时朱里没有偏一侧：${JSON.stringify(sim.scoreTrail)}`);
+    }
+    if (sim.scoreTie.pressLead !== 0.35 || sim.scoreTie.keeperErr !== 0.03 ||
+        sim.scoreTie.coverBias !== 0) {
+      fail(`G04 0:0 时比分起伏参数不是默认值：${JSON.stringify(sim.scoreTie)}`);
+    }
+    if (simMs > 5000) fail(`G04 20 个种子的确定性自检用了 ${simMs}ms，太慢（不能跑真实时间比赛）`);
+    const afterSim = await page.evaluate(() => ({
+      cur: window.__daily.current,
+      ctl: document.getElementById("bgCtl").hidden,
+      hud: document.getElementById("bgHud").classList.contains("show")
+    }));
+    if (afterSim.cur || !afterSim.ctl || afterSim.hud) {
+      fail("G04 确定性自检把正常游戏的状态 / HUD 弄乱了");
+    }
+    const storeSim = await page.evaluate(() => window.__daily.store());
+    if (Object.keys(storeSim).length !== Object.keys(store2).length) {
+      fail("G04 确定性自检往存档里写了东西");
+    }
+    ok(`G04 §6.8 确定性自检：一条龙 20 种子进 ${goals} 球（${Math.round(goals / routes.length * 100)}%，` +
+       `改前基线 100%）/ 守线·守门前置 / σ=0 落点严格等于瞄准点 / 触球与拨球 / 比分起伏参数，` +
+       `headless ${simMs}ms`);
+  }
 
   ok(`G04：俯视 2.5D 球场 1 对 2 先进三球 —— 二维跑位、抢断圈上/下博弈（打错边被晃、` +
      `打空档断球）、蓄力 A/D 转角度 + W/S 调高度、电脑抢断有抬手都成立；` +
