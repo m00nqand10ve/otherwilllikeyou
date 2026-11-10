@@ -21,23 +21,51 @@
     corridor: { bg: "corridor", name: "走廊 · 课间" }
   };
 
-  // 三个站位：朱里在大布告栏前，由乃在教室门口，我在右边搬箱子。
+  // 三个站位：朱里在大布告栏前，由乃在教室门口，我在搬箱子那一头。
+  // 「我」这一站跟着推箱路线一起镜像（见下面的参数计划）。
   const STATION = { girl: 318, friend: 252, boy: 392 };
 
-  // 朱里 · 布告栏上的虚线框。纸从手里（y=200）升到框里（y=88）。
-  const NOTICE = { x: 338, y0: 200, y1: 56, cy: 88, half: 10, rise: 1.45 };
-  // 正好落在框里的那段 hold 进度：由 y 反推出 t
-  const BAND_LO = (NOTICE.y0 - (NOTICE.cy + NOTICE.half)) / (NOTICE.y0 - NOTICE.y1);
-  const BAND_HI = (NOTICE.y0 - (NOTICE.cy - NOTICE.half)) / (NOTICE.y0 - NOTICE.y1);
-  const NOTICE_BAND = [BAND_LO, BAND_HI];   // ≈ [0.708, 0.847]
+  // 朱里 · 布告栏上的虚线框。纸从手里（y=200）升到框里。
+  // 框心在三个候选位上轮换（重玩随机化）；首通永远用现行值 88。
+  const NOTICE = { x: 338, y0: 200, y1: 56, half: 10, rise: 1.45, cys: [88, 76, 100] };
+  /** 正好落在框里的那段 hold 进度：由框心 y 反推出 t。首通仍是 ≈[0.708, 0.847]。 */
+  function noticeBandFor(cy) {
+    return [
+      (NOTICE.y0 - (cy + NOTICE.half)) / (NOTICE.y0 - NOTICE.y1),
+      (NOTICE.y0 - (cy - NOTICE.half)) / (NOTICE.y0 - NOTICE.y1)
+    ];
+  }
 
   // 由乃 · 门口三摞材料。order 是纸上印的号，从左到右。
+  // 首通是现行顺序 [2,3,1]；重玩按种子洗牌，保证和上一次不一样。
   const PAPERS = { xs: [146, 174, 202], y: 246, order: [2, 3, 1] };
 
   // 我 · 箱子。start → 门槛 thr（要抬）→ 落点 drop → 推过头会滚回来。
   const BOX = {
     start: 418, max: 466, thr: 438, drop: [448, 460],
     speed: 46, y: 238, rollFrom: 466, rollTo: 430
+  };
+  // 镜像路线：从左侧楼梯口送达。整条路线按画面宽 512 - x 折过去。
+  const BOX_MIRROR = {
+    start: 512 - BOX.start,                    // 94
+    max: 512 - BOX.max,                        // 46
+    thr: 512 - BOX.thr,                        // 74
+    drop: [512 - BOX.drop[1], 512 - BOX.drop[0]],   // [52, 64]
+    speed: BOX.speed, y: BOX.y,
+    rollFrom: 512 - BOX.rollFrom, rollTo: 512 - BOX.rollTo
+  };
+
+  // 抬起来之后还要往楼梯口走一段：慢速横移约 120px。
+  // 路上一个路人从对面走来，玩家用 W / S 换一条纵深线让开；
+  // 碰到只是停一下重抬，不算失败，也不记 misses。
+  const WALK = {
+    dist: 120, speed: 20,          // 世界坐标里的横移距离 / 速度
+    laneMin: 226, laneMax: 250,    // W / S 能调的纵深线
+    laneSpeed: 38,
+    bumpX: 28, bumpY: 9,           // 碰到的判定框（横向 / 纵深）
+    pause: 0.9,                    // 碰到之后停多久
+    npcLead: 170, npcSpeed: 40,    // 路人从前方多远迎面走来
+    camEase: 110                   // 镜头先让开一点，把前面让进画面
   };
 
   // 三个人一起抬箱子：按住空格把箱子抬起来，A / D 把晃动压回中间。
@@ -53,12 +81,75 @@
     dropPause: 0.9
   };
 
+  // ---------------------------------------------------------------- 参数种子化
+  // 「本场第几次游玩」就是种子。第 0 次 = 现行参数（首通体验不变），
+  // 重玩才洗牌：材料顺序、虚线框位置、推箱路线是否镜像。
+
+  function makeRnd(seed) {          // 和 ball.js 同一个确定性伪随机
+    let s = seed >>> 0;
+    return function () { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
+  }
+
+  const PLAN_FIRST = {
+    n: 0,
+    papersOrder: PAPERS.order.slice(),     // [2,3,1]
+    noticeCy: NOTICE.cys[0],               // 88
+    noticeBand: noticeBandFor(NOTICE.cys[0]),
+    mirror: false,
+    box: BOX,
+    boyStation: STATION.boy,
+    walkDir: 1
+  };
+  const planCache = [PLAN_FIRST];
+
+  function sameOrder(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  /** 第 n 次游玩的参数组。纯函数、可复现：自检和浏览器用的是同一份。 */
+  function planForRun(n) {
+    if (!(n > 0)) return planCache[0];
+    if (planCache[n]) return planCache[n];
+    const rnd = makeRnd(0x9e3779b9 ^ Math.imul(n + 1, 2654435761));
+    const order = [1, 2, 3];
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      const t = order[i]; order[i] = order[j]; order[j] = t;
+    }
+    // 洗出来和上一次一样就转一格：保证「材料顺序不等于上次」。
+    if (sameOrder(order, planForRun(n - 1).papersOrder)) {
+      const t = order[0]; order[0] = order[1]; order[1] = t;
+    }
+    const mirror = n % 2 === 1;
+    const plan = {
+      n: n,
+      papersOrder: order,
+      noticeCy: NOTICE.cys[n % NOTICE.cys.length],   // 三个候选位轮换
+      noticeBand: noticeBandFor(NOTICE.cys[n % NOTICE.cys.length]),
+      mirror: mirror,
+      box: mirror ? BOX_MIRROR : BOX,
+      boyStation: mirror ? 512 - STATION.boy : STATION.boy,
+      walkDir: mirror ? -1 : 1
+    };
+    planCache[n] = plan;
+    return plan;
+  }
+
   D.games.errand = function (host) {
     const trio = D.createTrio();
     // 这一场三个人都不自己走位：全部由下面这几个函数亲手摆。
     trio.pause(true);
 
     const A = { girl: trio.girl, friend: trio.friend, boy: trio.boy };
+
+    // 本场第几次游玩 → 参数组。计数落盘，重进一次就换一组；
+    // resetDaily 只删完成键，不会把这个计数删掉。
+    const runs = Math.max(0, Number(D.store.errandRuns) || 0);
+    D.persist({ errandRuns: runs + 1 });
+    const plan = planForRun(runs);
+    const B = plan.box;
 
     // 走廊里本来就有别人。只走远侧那条道，不抢三个人的站位。
     // 走廊里本来就有别人。只走远侧那条道，而且避开中间三个人的作业区——
@@ -75,6 +166,13 @@
         size: 0.76, alpha: 0.5, speed: 18, seed: 9
       })
     ];
+    // 抬箱走那一段时迎面来的路人。复用 crowd 的绘制 / 走位，只有一个人。
+    // 活动范围放宽：他会从画面外（甚至世界坐标更远处）走进来，不能被边界提前掰回去。
+    const passers = D.createCrowd({
+      count: 1, xMin: -400, xMax: 1000, yMin: BOX.y, yMax: BOX.y,
+      size: 0.78, alpha: 0.66, speed: WALK.npcSpeed, seed: 41
+    });
+    passers.actors[0].hidden = true;
 
     let t = 0;
     let state = "intro";      // intro | work | ending | walkout | carry | carryDone | handover | done
@@ -85,29 +183,36 @@
     let hintText = "";
     let touchHold = false;
     let lastPoke = -9, pokeCount = 0, talkIdx = 0;
+    let cam = 0;              // 抬箱走路那一段的镜头平移（世界坐标 → 屏幕）
 
     // ---- 朱里 · 贴通知 ----------------------------------------------------
     const notice = {
-      t: 0, y: NOTICE.y0, restY: NOTICE.y0, tilt: 0,
+      t: 0, y: NOTICE.y0, restY: NOTICE.y0, tilt: 0, jx: 0,
+      cy: plan.noticeCy, band: plan.noticeBand.slice(),
+      link: false, praise: false,
       done: false, misses: 0, held: false, missed: false, fallT: 0
     };
 
     // ---- 由乃 · 数材料 ----------------------------------------------------
     const papers = {
       sel: 0, picked: 0, done: false, misses: 0,
-      flash: 0, flashIdx: -1, order: PAPERS.order.slice()
+      flash: 0, flashIdx: -1, order: plan.papersOrder.slice()
     };
 
     // ---- 我 · 搬箱子 ------------------------------------------------------
     const box = {
-      x: BOX.start, lifted: false, done: false, misses: 0,
-      held: false, rolling: 0, rollFrom: BOX.start, rollTo: BOX.rollTo
+      x: B.start, lifted: false, done: false, misses: 0,
+      held: false, rolling: 0, rollFrom: B.start, rollTo: B.rollTo
     };
 
     // ---- 三个人一起抬 ----------------------------------------------------
     const carry = {
       holding: false, lift: 0, rise: 0, tilt: 0, v: 0,
-      misses: 0, dropT: 0, done: false, endT: 0, finishing: false
+      misses: 0, dropT: 0, done: false, endT: 0, finishing: false,
+      // 抬起来之后往楼梯口走的那一段
+      walkOn: false, walkFrom: 0, walkTo: 0, walkDir: plan.walkDir, walkProgress: 0,
+      lane: BOX.y, bumps: 0, blockT: 0, bumpedNpc: false,
+      swayScale: 1
     };
     let touchDir = 0;
 
@@ -156,7 +261,7 @@
       if (who !== "girl" && who !== "friend" && who !== "boy") return;
       if (who === active) return;
       notice.held = false;
-      notice.restY = notice.done ? NOTICE.cy : NOTICE.y0;
+      notice.restY = notice.done ? notice.cy : NOTICE.y0;
       notice.t = 0;
       if (box.held) releaseBox();
       box.held = false;
@@ -217,6 +322,12 @@
 
     // ---------------------------------------------------------------- 朱里
 
+    /** 由乃材料全对（一次都没拿错）时，朱里这边会稳一点。
+     *  只给正反馈：她做砸了也只是回到原难度，不额外加难。 */
+    function noticeLinkOn() {
+      return papers.done && papers.misses === 0;
+    }
+
     function postNotice(dt) {
       if (notice.done) { notice.held = false; return; }
       const held = (D.keys[" "] || touchHold) && !frozen && !D.dialogOpen();
@@ -225,6 +336,12 @@
         notice.t = 0;
         notice.missed = false;
         notice.fallT = 0;
+        notice.link = noticeLinkOn();
+        // 旁白点一句，不弹对白框，也不改数值
+        if (notice.link && !notice.praise) {
+          notice.praise = true;
+          D.react("旁白", "有人扶着就是不一样。", 1900);
+        }
         D.audio.click();
       } else if (!held && notice.held) {
         notice.held = false;
@@ -234,6 +351,11 @@
         notice.t = Math.min(1, notice.t + dt / NOTICE.rise);
         notice.y = D.lerp(NOTICE.y0, NOTICE.y1, notice.t);
         notice.tilt = 0;
+        // 上升时左右轻微发抖。联动上了就减半——只是看着更稳，判定区间不变。
+        const js = notice.link ? 0.5 : 1;
+        notice.jx = (Math.sin(t * 23.7) * 1.5 + Math.sin(t * 9.3) * 0.8) * js;
+      } else {
+        notice.jx += (0 - notice.jx) * Math.min(1, dt * 10);
       }
     }
 
@@ -243,10 +365,11 @@
         notice.restY = NOTICE.y0;
         return;
       }
-      const inFrame = Math.abs(notice.y - NOTICE.cy) <= NOTICE.half + 0.5;
+      const inFrame = Math.abs(notice.y - notice.cy) <= NOTICE.half + 0.5;
       if (inFrame) {
         notice.done = true;
-        notice.restY = NOTICE.cy;
+        notice.restY = notice.cy;
+        notice.link = noticeLinkOn();
         notice.tilt = 0.02;
         notice.t = 0;
         D.audio.right();
@@ -259,7 +382,7 @@
       notice.misses++;
       notice.missed = true;
       notice.restY = NOTICE.y0;
-      notice.tilt = notice.y < NOTICE.cy ? -0.55 : 0.5;
+      notice.tilt = notice.y < notice.cy ? -0.55 : 0.5;
       notice.fallT = 0.5;
       notice.t = 0;
       D.audio.wrong();
@@ -332,15 +455,18 @@
       if (!box.held) return;
 
       // 门槛只拦「还没跨过去」的箱子；跨过去之后即使放下也能继续推
-      const blocked = !box.lifted &&
-        box.x >= BOX.thr - 3 && box.x < BOX.thr + 2;
-      if (!blocked && box.x < BOX.max) {
-        box.x = Math.min(BOX.max, box.x + BOX.speed * dt);
+      const dir = carry.walkDir;                 // 镜像路线就往左推
+      const blocked = !box.lifted && (dir > 0
+        ? (box.x >= B.thr - 3 && box.x < B.thr + 2)
+        : (box.x <= B.thr + 3 && box.x > B.thr - 2));
+      if (!blocked) {
+        if (dir > 0 && box.x < B.max) box.x = Math.min(B.max, box.x + B.speed * dt);
+        else if (dir < 0 && box.x > B.max) box.x = Math.max(B.max, box.x - B.speed * dt);
       }
       A.boy.moving = true;          // 原地推车的循环动作
-      A.boy.dir = 1;
+      A.boy.dir = dir;
       // 抬过门槛之后箱子自己落下，别一直浮着
-      if (box.lifted && box.x > BOX.thr + 8) {
+      if (box.lifted && (dir > 0 ? box.x > B.thr + 8 : box.x < B.thr - 8)) {
         box.lifted = false;
         D.audio.step();
       }
@@ -349,19 +475,20 @@
     function releaseBox() {
       if (box.done) return;
       A.boy.moving = false;
-      if (box.x >= BOX.drop[0] && box.x <= BOX.drop[1]) {
+      const dir = carry.walkDir;
+      if (box.x >= B.drop[0] && box.x <= B.drop[1]) {
         box.done = true;
         box.lifted = false;
         D.audio.right();
         flashHint("放到位了。", 1500);
         renderTags();
         updateObjective();
-      } else if (box.x > BOX.drop[1]) {
+      } else if (dir > 0 ? box.x > B.drop[1] : box.x < B.drop[0]) {
         box.misses++;
         box.lifted = false;
         box.rolling = 0.9;
         box.rollFrom = box.x;
-        box.rollTo = BOX.rollTo;
+        box.rollTo = B.rollTo;
         D.audio.wrong();
         flashHint("推过头了——箱子又滚回来了。", 1700);
       }
@@ -376,7 +503,7 @@
       box.x = D.lerp(box.rollFrom, box.rollTo, e);
       if (box.rolling <= 0) {
         box.rolling = 0;
-        box.x = BOX.rollTo;
+        box.x = B.rollTo;
       }
     }
 
@@ -489,6 +616,14 @@
       carry.done = false;
       carry.endT = 0;
       carry.finishing = false;
+      carry.walkOn = false;
+      carry.walkProgress = 0;
+      carry.lane = BOX.y;
+      carry.bumps = 0;
+      carry.blockT = 0;
+      carry.bumpedNpc = false;
+      // 推箱全程没回滚（没推过头）→ 抬箱段晃得更小。只给正反馈。
+      carry.swayScale = box.misses === 0 ? 0.7 : 1;
       clearCarryPose();
       syncCarryTrio();
       touchHold = false;
@@ -518,16 +653,115 @@
     function syncCarryTrio() {
       // 朱里和由乃夹着箱子，我站在正中间：我的抬箱帧里
       // 本来就画着箱子，游戏里的箱子正好叠上去；三个人站在同一条脚线上。
+      // 抬起来走路那一段，脚线会跟着 W / S 的纵深微调一起动。
       trio.girl.x = box.x - 25;
       trio.friend.x = box.x + 25;
       trio.boy.x = box.x;
-      trio.girl.y = BOX.y;
-      trio.friend.y = BOX.y;
-      trio.boy.y = BOX.y;
+      trio.girl.y = carry.lane;
+      trio.friend.y = carry.lane;
+      trio.boy.y = carry.lane;
+    }
+
+    /** 抬起来之后往楼梯口走的那一段：慢速横移 + 迎面一个路人。 */
+    function beginCarryWalk() {
+      carry.walkOn = true;
+      carry.walkFrom = box.x;
+      carry.walkTo = box.x + carry.walkDir * WALK.dist;
+      carry.walkProgress = 0;
+      carry.lane = BOX.y;
+      const npc = passers.actors[0];
+      npc.hidden = false;
+      npc.x = carry.walkTo + carry.walkDir * WALK.npcLead;
+      npc.y = BOX.y;
+      npc.dir = -carry.walkDir;
+      npc.face = carry.walkDir > 0 ? "left" : "right";
+      npc.speed = WALK.npcSpeed;
+      npc.pause = 0;
+      D.react("朱里", "行了，走。", 900);
+      D.hint("W / S 换个位置，让一让", 3200);
+    }
+
+    function stopCarryWalk() {
+      carry.walkOn = false;
+      carry.walkProgress = 1;
+      box.x = carry.walkTo;
+      passers.actors[0].hidden = true;
+      carry.endT = 0.7;
+      carry.finishing = false;
+      D.audio.right();
+      D.react("朱里", "到了。", 900);
+    }
+
+    function updateCarryWalk(dt) {
+      // 纵深：W / S 换一条线，站远一点或近一点，把迎面的人让开。
+      const ay = D.axisY();
+      if (ay !== 0) {
+        carry.lane = D.clamp(carry.lane - ay * WALK.laneSpeed * dt,
+          WALK.laneMin, WALK.laneMax);
+      }
+
+      // 平衡只影响画面：抬起之后三个人一起抬，不会因为晃而失败。
+      const held = (D.keys[" "] || touchHold) && !frozen && !D.dialogOpen();
+      if (held) {
+        carry.v += Math.sin(t * CARRY.swayFreq) * CARRY.sway * carry.swayScale * 0.5 * dt;
+        carry.v += (D.axisX() || touchDir) * CARRY.correct * 0.6 * dt;
+        carry.v -= carry.tilt * CARRY.restore * dt;
+        carry.v *= Math.exp(-CARRY.damp * dt);
+        carry.tilt = D.clamp(carry.tilt + carry.v * dt,
+          -CARRY.tiltMax * 0.7, CARRY.tiltMax * 0.7);
+      } else {
+        carry.v *= Math.exp(-3 * dt);
+        carry.tilt += (0 - carry.tilt) * Math.min(1, dt * 6);
+      }
+
+      // 碰到路人：停一下、把箱子放低一点，再抬起来接着走。不记 misses。
+      const npc = passers.actors[0];
+      if (!carry.bumpedNpc &&
+          Math.abs(npc.x - box.x) < WALK.bumpX &&
+          Math.abs(carry.lane - npc.y) < WALK.bumpY) {
+        carry.bumpedNpc = true;
+        carry.blockT = WALK.pause;
+        carry.bumps++;
+        carry.rise = Math.max(0.35, carry.rise - 0.35);
+        D.audio.step();
+        D.react("由乃", "有人，慢点。", 900);
+      }
+
+      if (carry.blockT > 0) {
+        carry.blockT -= dt;
+        carry.rise = Math.max(0.35, carry.rise - dt * 2.2);
+      } else {
+        carry.rise = Math.min(1, carry.rise + dt * 2.2);
+        box.x += carry.walkDir * WALK.speed * dt;
+        const doneMove = carry.walkDir > 0
+          ? box.x >= carry.walkTo : box.x <= carry.walkTo;
+        if (doneMove) stopCarryWalk();
+      }
+      carry.walkProgress = D.clamp(
+        Math.abs(box.x - carry.walkFrom) / WALK.dist, 0, 1);
+
+      setCarryPose(carry.rise >= 0.85 ? "carry" : "pickup");
+      syncCarryTrio();
+      trio.girl.moving = false;
+      trio.friend.moving = false;
+      trio.boy.moving = false;
+      trio.girl.dir = carry.walkDir;
+      trio.friend.dir = carry.walkDir;
+      trio.boy.dir = carry.walkDir;
+
+      // 走到哪，镜头就跟到哪；先让开一点点，把前面那段走廊让进画面。
+      // 镜像路线往左走，镜头就往左挪，屏幕坐标 = 世界坐标 - cam。
+      const walked = (box.x - carry.walkFrom) * carry.walkDir;
+      const ease = D.clamp(walked / 42, 0, 1);
+      cam = carry.walkDir * (WALK.camEase * (ease * ease * (3 - 2 * ease)) + walked);
     }
 
     function updateCarry(dt) {
       if (carry.done) {
+        if (carry.walkOn) {
+          updateCarryWalk(dt);
+          return;
+        }
         carry.endT -= dt;
         if (carry.endT <= 0 && !carry.finishing) {
           carry.finishing = true;
@@ -560,7 +794,7 @@
       const ax = D.axisX() || touchDir;
       if (held) {
         carry.lift = Math.min(1, carry.lift + dt / CARRY.hold);
-        carry.v += Math.sin(t * CARRY.swayFreq) * CARRY.sway * dt;
+        carry.v += Math.sin(t * CARRY.swayFreq) * CARRY.sway * carry.swayScale * dt;
         carry.v += ax * CARRY.correct * dt;
         carry.v -= carry.tilt * CARRY.restore * dt;
         carry.v *= Math.exp(-CARRY.damp * dt);
@@ -591,15 +825,14 @@
         carry.holding = false;
         carry.rise = 1;
         setCarryPose("carry");
-        carry.endT = 0.75;
         box.lifted = true;
         trio.girl.moving = false;
         trio.friend.moving = false;
         trio.boy.moving = false;
         D.audio.right();
-        D.objective("抬到楼梯口了", "");
-        flashHint("抬起来了。", 1000);
-        D.react("朱里", "行了，走。", 900);
+        D.objective("抬到楼梯口了", "W / S 让一让迎面的人");
+        flashHint("抬起来了——往楼梯口走。", 1200);
+        beginCarryWalk();
       }
     }
 
@@ -670,7 +903,7 @@
       hideTags();
 
       // 三个人先在教室门口，再各走各的
-      A.boy.x = STATION.boy; A.boy.y = 230;
+      A.boy.x = plan.boyStation; A.boy.y = 230;
       A.girl.x = STATION.friend + 8; A.girl.y = 218;
       A.friend.x = STATION.friend + 20; A.friend.y = 224;
       for (const k in A) {
@@ -780,6 +1013,7 @@
     function update(dt) {
       t += dt;
       for (const c of crowds) c.update(dt);
+      passers.update(dt);
       trio.update(dt);
       if (hintLock > 0) hintLock -= dt;
       if (papers.flash > 0) papers.flash -= dt;
@@ -819,7 +1053,9 @@
       if ((state === "work" || state === "carry") && !D.dialogOpen()) {
         if (hintLock <= 0) {
           setHint(state === "carry"
-            ? "按住空格抬起来 · A / D 稳住"
+            ? (carry.walkOn
+              ? "按住空格稳住 · W / S 让一让"
+              : "按住空格抬起来 · A / D 稳住")
             : opHint());
         }
       } else if (hintText != null) {
@@ -859,13 +1095,22 @@
     // ---------------------------------------------------------------- 绘制
 
     function draw(ctx) {
-      ctx.drawImage(D.img[SCENES.corridor.bg], 0, 0, D.W, D.H);
+      // 背景按镜头平移平铺：抬箱走那一段镜头会跟着往楼梯口挪一点，
+      // 走廊图左右两端都是砖柱，平铺接上去看着像走廊还在往前延伸。
+      const c = Math.round(cam);
+      for (let k = -2; k <= 2; k++) {
+        ctx.drawImage(D.img[SCENES.corridor.bg], k * D.W - c, 0, D.W, D.H);
+      }
+      ctx.save();
+      ctx.translate(-c, 0);
       drawNotice(ctx);
       drawPapers(ctx);
       drawActiveRing(ctx);
-      for (const c of crowds) c.draw(ctx, t);
+      for (const cm of crowds) cm.draw(ctx, t);
+      passers.draw(ctx, t);
       trio.draw(ctx);
       drawBox(ctx);
+      ctx.restore();
       drawCarry(ctx);
       drawPrompts(ctx);
     }
@@ -878,9 +1123,9 @@
         ctx.lineWidth = 1;
         ctx.strokeStyle = active === "girl"
           ? "rgba(255,226,180,.95)" : "rgba(255,226,180,.42)";
-        ctx.strokeRect(NOTICE.x - 12, NOTICE.cy - 12, 24, 24);
+        ctx.strokeRect(NOTICE.x - 12, notice.cy - 12, 24, 24);
       }
-      ctx.translate(NOTICE.x, Math.round(notice.y));
+      ctx.translate(NOTICE.x + notice.jx, Math.round(notice.y));
       ctx.rotate(notice.tilt);
       ctx.fillStyle = "#f7f0dd";
       ctx.fillRect(-7, -9, 14, 18);
@@ -952,7 +1197,7 @@
     }
 
     function drawBox(ctx) {
-      const y = BOX.y;
+      const y = carry.lane;
 
       // 落点：虚线框 + 楼梯口
       if (!box.done) {
@@ -960,23 +1205,28 @@
         ctx.setLineDash([3, 3]);
         ctx.lineWidth = 1;
         ctx.strokeStyle = "rgba(255,212,151,.55)";
-        ctx.strokeRect(BOX.drop[0] - 2, y - 20,
-                       BOX.drop[1] - BOX.drop[0] + 4, 20);
+        ctx.strokeRect(B.drop[0] - 2, y - 20,
+                       B.drop[1] - B.drop[0] + 4, 20);
         ctx.restore();
       }
       ctx.save();
       ctx.fillStyle = "rgba(255,226,180,.72)";
       ctx.font = '8px "Microsoft YaHei",sans-serif';
-      ctx.textAlign = "right";
       ctx.textBaseline = "middle";
-      ctx.fillText("楼梯口 →", 476, y - 27);
+      if (plan.mirror) {                 // 镜像路线：楼梯口在西边
+        ctx.textAlign = "left";
+        ctx.fillText("← 楼梯口", 36, y - 27);
+      } else {
+        ctx.textAlign = "right";
+        ctx.fillText("楼梯口 →", 476, y - 27);
+      }
       ctx.restore();
 
       // 门槛
       ctx.fillStyle = box.lifted ? "#8a7a84" : "#43363f";
-      ctx.fillRect(BOX.thr - 3, y - 5, 6, 5);
+      ctx.fillRect(B.thr - 3, y - 5, 6, 5);
       ctx.fillStyle = "rgba(20,16,22,.45)";
-      ctx.fillRect(BOX.thr - 3, y - 1, 6, 1);
+      ctx.fillRect(B.thr - 3, y - 1, 6, 1);
 
       // 箱子。抬箱子阶段会随晃动歪一点，也跟着三个人一起离地；
       // 抬满时箱底正好落在我抬箱帧里那只箱子的位置。
@@ -1062,8 +1312,10 @@
       if (state !== "work") return;
       // 箱子卡在门槛上：浮一个 E
       if (active === "boy" && !box.done && !box.lifted &&
-          box.x >= BOX.thr - 5 && box.x < BOX.thr + 2) {
-        const y = BOX.y - 34 + Math.sin(t * 4) * 2;
+          (plan.mirror
+            ? (box.x <= B.thr + 5 && box.x > B.thr - 2)
+            : (box.x >= B.thr - 5 && box.x < B.thr + 2))) {
+        const y = carry.lane - 34 + Math.sin(t * 4) * 2;
         const x = Math.round(box.x);
         ctx.save();
         ctx.globalAlpha = 0.9;
@@ -1097,7 +1349,9 @@
       get noticeDone() { return notice.done; },
       get noticeMisses() { return notice.misses; },
       get noticeT() { return notice.t; },
-      get noticeBand() { return NOTICE_BAND.slice(); },
+      get noticeBand() { return notice.band.slice(); },
+      get noticeLink() { return notice.link; },
+      get noticeJitterScale() { return notice.link ? 0.5 : 1; },
       get paperOrder() { return papers.order.slice(); },
       get paperSel() { return papers.sel; },
       get paperPicked() { return papers.picked; },
@@ -1109,12 +1363,29 @@
       get boxLifted() { return box.lifted; },
       get boxDone() { return box.done; },
       get boxMisses() { return box.misses; },
-      get boxDrop() { return BOX.drop.slice(); },
-      get boxThr() { return BOX.thr; },
+      get boxDrop() { return B.drop.slice(); },
+      get boxThr() { return B.thr; },
+      get run() {
+        return {
+          n: plan.n, papersOrder: plan.papersOrder.slice(),
+          noticeCy: plan.noticeCy, noticeBand: plan.noticeBand.slice(),
+          mirror: plan.mirror, walkDir: plan.walkDir,
+          boyStation: plan.boyStation,
+          box: {
+            start: B.start, max: B.max, thr: B.thr,
+            drop: B.drop.slice(), rollTo: B.rollTo
+          }
+        };
+      },
       get carry() {
         return {
           lift: carry.lift, rise: carry.rise, tilt: carry.tilt, misses: carry.misses,
           done: carry.done, holding: carry.holding, dropT: carry.dropT,
+          walkOn: carry.walkOn, walkProgress: carry.walkProgress,
+          walkFrom: carry.walkFrom, walkTo: carry.walkTo,
+          walkDir: carry.walkDir, lane: carry.lane,
+          bumps: carry.bumps, blockT: carry.blockT,
+          swayScale: carry.swayScale,
           poses: {
             boy: trio.boy.pose || null,
             girl: trio.girl.pose || null,
@@ -1126,5 +1397,8 @@
       get pokeCount() { return pokeCount; }
     };
   };
+
+  // 自检 / 调试用：第 n 次游玩的参数组是纯函数，不用真玩也能验。
+  D.games.errand.planForRun = planForRun;
 
 })(window);
