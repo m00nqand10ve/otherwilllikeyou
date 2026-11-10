@@ -146,7 +146,146 @@
     }
   }
 
-  function makeGhost() {
+  // ---------------------------------------------------------------- 主题底稿（§1.1）
+  //
+  // 主题是一份数据（lines.js 的 THEMES）：底稿构图由 `ghost` 字段选，
+  // board.js 只负责「照这个构图把淡线画出来」。人像那套用内嵌画稿
+  // （ghost-art.js），另外两个主题全用粉笔函数手绘——不新增任何图片。
+  //
+  // 主图里她之后要填色的格子，也是从同一张画稿烘出来的（bakeCells），
+  // 所以换主题只换构图，不改「你描轮廓、她填色」的分工。
+
+  // 画稿在板面上的方框：正好铺满主图区（16..432 × 48..176）的正中一块正方形
+  const GHOST_PIC = { x: 160, y: 48, w: 128, h: 128 };
+  const ART_UNIT = 96;   // 手绘构图的本地坐标是 96×96，画进 128 的方框要乘 128/96
+
+  // 自己写的伪随机（和 act5/ball.js 的 makeRnd 同式）：底稿里的星点、云位可复现
+  function makeRnd(seed) {
+    let s = seed >>> 0;
+    return function () { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
+  }
+
+  /**
+   * 斜向排线。
+   * 人像画稿是 PNG，里面有实心头发块，她（girl.js）照「有粉笔的格子」填色才够量；
+   * 手绘的两个主题没有实心块，靠这层排线把可填的格子铺出来——同一套分工，
+   * 也是草稿该有的样子（和主图人像里那层排线一个意思）。
+   */
+  function hatchChalk(g, ox, oy, s, x0, y0, x1, y1, step, a) {
+    const W = Math.max(1, 1.3 * s);
+    const span = y1 - y0;
+    for (let x = x0 - span; x <= x1; x += step) {
+      const ax = Math.max(x0, x);
+      const bx = Math.min(x1, x + span);
+      if (bx - ax < 1.5) continue;
+      chalk(g, ox + ax * s, oy + (y1 - (ax - x)) * s,
+        ox + bx * s, oy + (y1 - (bx - x)) * s,
+        { w: W, alpha: a == null ? 0.28 : a, grain: 0.3 });
+    }
+  }
+
+  /** 运动会主图：跑道 + 冲线的小人 + 太阳。本地 96×96 坐标。 */
+  function drawTrackArt(g, ox, oy, s) {
+    const X = (x) => ox + x * s;
+    const Y = (y) => oy + y * s;
+    const W = (v) => Math.max(1, v * s);
+    const line = (x0, y0, x1, y1, a, w) =>
+      chalk(g, X(x0), Y(y0), X(x1), Y(y1), { w: W(w || 2), alpha: a == null ? 0.42 : a, grain: 0.28 });
+    const poly = (pts, a) => {
+      for (let i = 1; i < pts.length; i++) line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], a);
+    };
+
+    // 云
+    for (const [cx, cy, r] of [[15, 12, 4.5], [25, 10, 3.6], [69, 11, 4.2], [79, 9, 3.4]]) {
+      ringChalk(g, X(cx), Y(cy), Math.max(2, r * s), { w: W(1.5), alpha: 0.3, grain: 0.32, skip: 0.24 });
+    }
+    // 太阳
+    ringChalk(g, X(83), Y(15), Math.max(3, 5.5 * s), { w: W(1.8), alpha: 0.4, grain: 0.26, skip: 0.14 });
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      line(83 + Math.cos(a) * 8, 15 + Math.sin(a) * 8, 83 + Math.cos(a) * 12, 15 + Math.sin(a) * 12, 0.34, 1.2);
+    }
+    // 跑道三条弧线
+    for (let k = 0; k < 3; k++) {
+      const pts = [];
+      for (let i = 0; i <= 16; i++) {
+        const t = i / 16, x = 3 + t * 90;
+        const y = 54 + k * 9 + Math.pow((x - 48) / 34, 2) * 9;
+        pts.push([x, y]);
+      }
+      for (let i = 1; i < pts.length; i++) line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], 0.42 - k * 0.05, 1.7);
+    }
+    // 冲线：竖直虚线 + 小旗
+    for (let y = 34; y <= 82; y += 5) line(74, y, 74, y + 2.6, 0.36, 1.4);
+    poly([[74, 34], [80, 30], [80, 37], [74, 40]], 0.34);
+    // 冲线的小人
+    ovalChalk(g, X(38), Y(35), Math.max(2, 4 * s), Math.max(2, 4.4 * s),
+      { w: W(2), alpha: 0.46, grain: 0.2, skip: 0.06 });
+    line(38, 39, 35, 52, 0.44, 2);                          // 身体
+    line(35, 52, 28, 63, 0.42, 2);                          // 后腿
+    line(35, 52, 42, 61, 0.42, 2);                          // 前腿
+    line(38, 42, 31, 49, 0.4, 1.8);                         // 后臂
+    line(38, 41, 47, 35, 0.4, 1.8);                         // 前臂
+    line(46, 35, 51, 32, 0.5, 2.2);                         // 接力棒
+    // 终点后的小标记
+    for (let i = 0; i < 4; i++) line(84 + (i % 2) * 4, 60 + i * 5, 87 + (i % 2) * 4, 60 + i * 5, 0.3, 1);
+    // 跑道里的排线：她照格子填色要有地方可填
+    hatchChalk(g, ox, oy, s, 6, 58, 90, 82, 4.5, 0.26);
+  }
+
+  /** 毕业季主图：学士帽 + 卷起来的证书 + 纸飞机。本地 96×96 坐标。 */
+  function drawCapArt(g, ox, oy, s) {
+    const X = (x) => ox + x * s;
+    const Y = (y) => oy + y * s;
+    const W = (v) => Math.max(1, v * s);
+    const line = (x0, y0, x1, y1, a, w) =>
+      chalk(g, X(x0), Y(y0), X(x1), Y(y1), { w: W(w || 2), alpha: a == null ? 0.42 : a, grain: 0.28 });
+    const poly = (pts, a) => {
+      for (let i = 1; i < pts.length; i++) line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], a);
+    };
+
+    // 帽顶：菱形
+    poly([[24, 32], [48, 21], [72, 32], [48, 43], [24, 32]], 0.46);
+    // 帽身：倒梯形
+    poly([[35, 36], [61, 36], [66, 54], [30, 54], [35, 36]], 0.42);
+    // 流苏
+    line(72, 32, 77, 45, 0.42, 1.8);
+    line(77, 45, 74, 55, 0.36, 1.4);
+    line(77, 45, 80, 54, 0.36, 1.4);
+    ringChalk(g, X(77), Y(56), Math.max(1.5, 2.4 * s), { w: W(1.4), alpha: 0.4, grain: 0.2, skip: 0.1 });
+    // 卷起来的证书
+    for (const cx of [20, 50]) {
+      ovalChalk(g, X(cx), Y(72), Math.max(2, 4.2 * s), Math.max(2, 3.2 * s),
+        { w: W(1.8), alpha: 0.4, grain: 0.26, skip: 0.08 });
+    }
+    line(20, 69, 50, 69, 0.4, 1.6);
+    line(20, 75, 50, 75, 0.36, 1.6);
+    line(34, 64, 34, 80, 0.3, 1.2);   // 系带
+    // 纸飞机
+    poly([[62, 58], [84, 53], [74, 66], [62, 58]], 0.44);
+    line(62, 58, 74, 66, 0.3, 1.1);
+    poly([[68, 70], [88, 68], [78, 80], [68, 70]], 0.36);
+    // 星点
+    const rnd = makeRnd(0xCA9);
+    for (const [x, y, r] of [[15, 20, 2.2], [38, 13, 1.8], [84, 28, 2.0], [12, 50, 1.6], [57, 84, 1.8]]) {
+      const rr = r * (0.8 + rnd() * 0.4);
+      line(x - rr, y, x + rr, y, 0.36, 1);
+      line(x, y - rr, x, y + rr, 0.36, 1);
+    }
+    // 帽身和证书里的排线：她照格子填色要有地方可填
+    hatchChalk(g, ox, oy, s, 31, 36, 66, 55, 4.5, 0.24);
+    hatchChalk(g, ox, oy, s, 18, 65, 52, 80, 4.5, 0.22);
+  }
+
+  function drawMainArt(g, kind, ox, oy, s) {
+    if (kind === "track") return drawTrackArt(g, ox, oy, s);
+    if (kind === "cap") return drawCapArt(g, ox, oy, s);
+    return null;
+  }
+
+  /** 四张底稿。kind 是主题的 ghost 字段：portrait（人像）/ track（跑道）/ cap（学士帽）。 */
+  function makeGhost(theme) {
+    const kind = (theme && theme.ghost) || "portrait";
     const mk = (draw) => {
       const c = document.createElement("canvas");
       c.width = BW;
@@ -170,17 +309,28 @@
       dashChalk(g, BW - BAND / 2, 0, BW - BAND / 2, BH, o);
     });
 
-    // 标题：一条下划线 + 两端小勾，意思是「字压在这条线上」
+    // 标题：一条下划线 + 两端小勾，意思是「字压在这条线上」。
+    // 运动会多两道短斜线（像起跑线），毕业季是双下划线（像信纸）——构图跟着主题变。
     out.title = mk((g) => {
       dashChalk(g, 88, 42, 360, 42, { w: 2, alpha: 0.46, grain: 0.3, dash: 16, gap: 8 });
       chalk(g, 88, 33, 88, 42, { w: 2, alpha: 0.4, grain: 0.3 });
       chalk(g, 360, 33, 360, 42, { w: 2, alpha: 0.4, grain: 0.3 });
+      if (kind === "track") {
+        for (let x = 104; x <= 344; x += 40) {
+          chalk(g, x, 34, x + 12, 34, { w: 2, alpha: 0.3, grain: 0.28 });
+        }
+      } else if (kind === "cap") {
+        dashChalk(g, 120, 47, 328, 47, { w: 1, alpha: 0.3, grain: 0.26, dash: 10, gap: 10 });
+      }
     });
 
-    // 主图：一张正面特写。按参考图量出来的比例——
-    // 长发中分垂到两肩、额头只露中间一条、眼睛占脸的三分之一、张嘴。
-    // 只勾轮廓，头发里的黑和脸颊的红留给玩家自己补。
+    // 主图：人像用内嵌画稿（下面 pic 会盖掉这层手绘兜底）；
+    // 另两个主题的手绘构图也画一份在同样的方框里，保证画稿没加载上时也不开天窗。
     out.main = mk((g) => {
+      if (kind !== "portrait") {
+        drawMainArt(g, kind, GHOST_PIC.x, GHOST_PIC.y, GHOST_PIC.w / ART_UNIT);
+        return;
+      }
       const line = (x0, y0, x1, y1, a) =>
         chalk(g, x0, y0, x1, y1, { w: 2, alpha: a == null ? 0.42 : a, grain: 0.28 });
       const poly = (pts, a) => {
@@ -244,8 +394,29 @@
     });
 
     // 装饰：三个小圈 + 十字，标出「图案放这儿」。这一层比别处亮一点——
-    // 它落在最下面那条带上，不亮一点会被地平线和边框压掉
+    // 它落在最下面那条带上，不亮一点会被地平线和边框压掉。
+    // 运动会改成三面小旗，毕业季改成四个小圈——玩家一眼能看出换主题了。
     out.deco = mk((g) => {
+      if (kind === "track") {
+        for (const x of [96, 224, 352]) {
+          const y = 208;
+          chalk(g, x - 5, y + 10, x - 5, y - 8, { w: 2, alpha: 0.44, grain: 0.28 });
+          const pts = [[x - 5, y - 8], [x + 10, y - 4], [x - 5, y + 1], [x - 5, y - 8]];
+          for (let i = 1; i < pts.length; i++) {
+            chalk(g, pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], { w: 2, alpha: 0.44, grain: 0.28 });
+          }
+        }
+        return;
+      }
+      if (kind === "cap") {
+        for (const x of [78, 168, 258, 348]) {
+          const y = 208;
+          ringChalk(g, x, y, 10, { w: 2, alpha: 0.5, grain: 0.3, skip: 0.3 });
+          chalk(g, x - 3, y - 5, x + 3, y + 5, { w: 1, alpha: 0.4, grain: 0.28 });
+          chalk(g, x + 3, y - 5, x - 3, y + 5, { w: 1, alpha: 0.4, grain: 0.28 });
+        }
+        return;
+      }
       for (const x of [90, 224, 358]) {
         const y = 208;
         ringChalk(g, x, y, 12, { w: 2, alpha: 0.52, grain: 0.3, skip: 0.3 });
@@ -417,24 +588,31 @@
     const felt = makeFelt();
     const frameArt = makeFrame();
     const glass = makeGlass();
-    const ghostArt = makeGhost();
 
-    // 主图如果带了一张现成的画稿（ghost-art.js 里的 GhostMain），就用它盖掉手绘那层。
-    // 手绘那套留着兜底——画稿没加载上也不至于开天窗。
+    // 主题（§1.1）。旧存档没有 theme 字段时走 reading（读书周）——
+    // 正是这一版之前默认的那套人像稿，兜底等于旧玩家看到的画面不变。
+    const LINES = global.ACT2.Lines || {};
+    const THEMES = LINES.THEMES || {};
+    const THEME_FALLBACK = LINES.THEME_FALLBACK || "reading";
+    let themeId = THEME_FALLBACK;
+    let themeData = THEMES[THEME_FALLBACK] ||
+      { id: "reading", name: "读书周", colorIndex: 0, ghost: "portrait", patterns: [] };
+    let ghostArt = null;
+    let statsCache = null;   // 结算聚合的缓存，invalidate / 换主题时清掉
+
+    // 主图那张「画稿」：人像主题用 ghost-art.js 里的内嵌图；
+    // 跑道 / 学士帽两个主题按 ghost 字段手绘。两种情况都烘到同一块离屏 canvas，
+    // 下游（她照格子填色、底稿淡出）只看图，不看主题。
     // 加载完先烘到离屏 canvas：每帧从 Image 直接 drawImage 会让 Chrome 反复解码，
     // 长时间跑会把页面跑崩（自检里就崩过一次）。
-    // 画稿正好铺满主图区（16..432 × 48..176）的正中一块正方形：
-    // 这样主图区一画完，整幅画一起淡掉，不会有一绺头发拖到装饰区里去。
-    const GHOST_PIC = { x: 160, y: 48, w: 128, h: 128 };
     const pic = document.createElement("canvas");
     pic.width = GHOST_PIC.w;
     pic.height = GHOST_PIC.h;
     let picReady = false;
-    // 画稿里「有粉笔」的格子，2px 一格。她给主图帮忙就是照这张表填色，
-    // 不是另起一笔去画——按设计文档说的「像素级填色」。
     let picCells = null;
-    function bakeCells() {
+    function bakeCells(minAlpha) {
       const S = 2;
+      const need = minAlpha == null ? 110 : minAlpha;
       const d = pic.getContext("2d").getImageData(0, 0, GHOST_PIC.w, GHOST_PIC.h).data;
       const cols = Math.ceil(GHOST_PIC.w / S);
       const rows = Math.ceil(GHOST_PIC.h / S);
@@ -447,25 +625,38 @@
           for (let y = gy * S; y < y1; y++) {
             for (let x = gx * S; x < x1; x++) { sum += d[(y * GHOST_PIC.w + x) * 4 + 3]; n++; }
           }
-          if (n && sum / n >= 110) {
+          if (n && sum / n >= need) {
             cells.push([GHOST_PIC.x + gx * S + S / 2, GHOST_PIC.y + gy * S + S / 2]);
           }
         }
       }
       return cells;
     }
-    (function () {
-      const src = global.ACT2 && global.ACT2.GhostMain;
-      if (!src) return;
-      const im = new Image();
-      im.onload = () => {
-        const pc = pic.getContext("2d");
-        pc.drawImage(im, 0, 0, GHOST_PIC.w, GHOST_PIC.h);
-        picReady = true;
-        try { picCells = bakeCells(); } catch (e) { picCells = null; }
-      };
-      im.src = src;
-    })();
+
+    /** 按主题重烘主图画稿：人像走内嵌 PNG，别的主题直接手绘进同一块 canvas。 */
+    function buildThemeMain(kind) {
+      picReady = false;
+      picCells = null;
+      const pc = pic.getContext("2d");
+      pc.clearRect(0, 0, GHOST_PIC.w, GHOST_PIC.h);
+      if (kind === "portrait") {
+        const src = global.ACT2 && global.ACT2.GhostMain;
+        if (!src) return;
+        const im = new Image();
+        im.onload = () => {
+          pc.clearRect(0, 0, GHOST_PIC.w, GHOST_PIC.h);
+          pc.drawImage(im, 0, 0, GHOST_PIC.w, GHOST_PIC.h);
+          picReady = true;
+          try { picCells = bakeCells(); } catch (e) { picCells = null; }
+        };
+        im.src = src;
+        return;
+      }
+      drawMainArt(pc, kind, 0, 0, GHOST_PIC.w / ART_UNIT);
+      picReady = true;
+      // 手绘构图没有 PNG 那种实心块，格子阈值放松到 70——她照的仍是「画稿上有粉笔的地方」
+      try { picCells = bakeCells(70); } catch (e) { picCells = null; }
+    }
 
     // 底稿的「隐约」程度：四层各乘一个 0→1 的淡出系数。
     // 0.24 是试出来的——再亮就像玩家已经画过了，再暗在深绿上几乎看不见。
@@ -506,12 +697,74 @@
     let drag = null;           // 正在拖的图案 { d, ox, oy, moved }
     let inkCache = null;       // 玩家层的墨迹位图，笔画结束才失效
     let assistCache = null;
+    // 接力描线的端点高亮（§1.3）：She 在 board 层之外留一小截，末端闪一下；
+    // 这个标记只画在屏幕上，不进任何图层、不进导出、也不算笔迹。
+    let relayHint = null;
     const history = [];
     const redoStack = [];
     let busy = false;
 
-    const listeners = { change: [], region: [], undo: [] };
+    /** 设置 / 清除接力端点高亮。传 null 或 alpha<=0 就是清掉。 */
+    function setRelayHint(hint) {
+      if (!hint || hint.alpha <= 0.02) { relayHint = null; return; }
+      relayHint = { x: hint.x, y: hint.y, alpha: hint.alpha };
+    }
+
+    const listeners = { change: [], region: [], undo: [], theme: [] };
     const emit = (k, v) => listeners[k].forEach((fn) => fn(v));
+
+    // ------------------------------------------------------------ 主题
+
+    /** 当前主题的只读投影：场景、自检、下游都用这一份。 */
+    function themeInfo() {
+      const t = themeData;
+      return {
+        id: themeId, name: t.name || "读书周", colorIndex: t.colorIndex || 0,
+        ghost: t.ghost || "portrait",
+        patterns: (t.patterns || []).slice(),
+        // 底稿标识：主题换了它一定换（自检用它证明「底稿构图随主题变化」）
+        ghostKey: (t.ghost || "portrait") + "/" + themeId
+      };
+    }
+
+    /**
+     * 换主题。只做三件事：换底稿（四张淡线 + 主图画稿）、换图案推荐序、换起始粉笔色。
+     * 玩家已经画下的东西一律不动——主题只在开画前选，或者由存档恢复，
+     * 中途调用也只是「换一张稿」，不是重开一块板。
+     */
+    function applyTheme(id) {
+      const t = THEMES[id] || THEMES[THEME_FALLBACK] || themeData;
+      themeId = t.id || THEME_FALLBACK;
+      themeData = t;
+      ghostArt = makeGhost(t.ghost || "portrait");
+      for (const k of GHOST_KEYS) { ghostFade[k] = 1; ghostTarget[k] = 1; }
+      ghostCheck = 0;
+      ghostLast = 0;
+      const firstPat = (t.patterns || []).find((pid) => PAT.BY_ID[pid]);
+      st.pattern = firstPat || (PATTERN_LIST.length ? PATTERN_LIST[0].id : null);
+      if (t.colorIndex != null && COLORS[t.colorIndex]) {
+        st.colorIndex = t.colorIndex;
+        st.color = COLORS[t.colorIndex].hex;
+      }
+      buildThemeMain(t.ghost || "portrait");
+      statsCache = null;
+      emit("theme", themeInfo());
+      emit("change", st);
+      st.dirty = true;
+    }
+
+    /** 主题推荐在前的图案序：面板按这个排，她添图案也从前面挑。 */
+    function themePatterns() {
+      const out = [];
+      for (const pid of (themeData.patterns || [])) {
+        const p = PAT.BY_ID[pid];
+        if (p && out.indexOf(p) < 0) out.push(p);
+      }
+      for (const p of PATTERN_LIST) if (out.indexOf(p) < 0) out.push(p);
+      return out;
+    }
+
+    applyTheme(themeId);
 
     // ------------------------------------------------------------ 历史
 
@@ -582,6 +835,7 @@
     function invalidate() {
       inkCache = null;
       assistCache = null;
+      statsCache = null;
       st.dirty = true;
       emit("change", st);
     }
@@ -679,6 +933,61 @@
     function allDone() {
       const r = regions();
       return r.title.done && r.main.done && r.frame.done && r.deco.done;
+    }
+
+    // ------------------------------------------------------------ 结算聚合（§1.5）
+    //
+    // 结算评价要指向「这幅画的具体特征」，所以这里把作品量化成四项：
+    //   colorCount   用到的粉笔色数（调色板里的；她填色的灰不算一种粉笔色）
+    //   fillRatio    主图填充率（沿用四区统计里的主图覆盖率）
+    //   patternCount 板上的图案数（她放的也算）
+    //   balance      左右笔迹量之差 / 总量（0 = 左右一样重，粗略对称度）
+    // 另外给出 left/right 原始像素数，自检用它和独立扫描对账。
+
+    const COLOR_RGB = COLORS.map((c) => {
+      const n = parseInt(c.hex.slice(1), 16);
+      return n;
+    });
+
+    function stats() {
+      if (statsCache) return statsCache;
+      const map = inkMap();
+      let left = 0, right = 0;
+      const half = BW / 2;
+      for (let y = 0; y < BH; y++) {
+        const row = y * BW;
+        for (let x = 0; x < BW; x++) {
+          if (!map[row + x]) continue;
+          if (x < half) left++; else right++;
+        }
+      }
+      const used = new Set();
+      const scan = (data) => {
+        for (let i = 0; i < data.length; i += 4) {
+          if (data[i + 3] <= 8) continue;
+          const v = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
+          const ci = COLOR_RGB.indexOf(v);
+          if (ci >= 0) used.add(ci);
+        }
+      };
+      scan(pg.getImageData(0, 0, BW, BH).data);
+      scan(ag.getImageData(0, 0, BW, BH).data);
+      for (const d of decos) {
+        const ci = COLOR_RGB.indexOf(parseInt(String(d.color).slice(1), 16));
+        if (ci >= 0) used.add(ci);
+      }
+      const rc = regions();
+      const total = left + right;
+      statsCache = {
+        theme: themeId,
+        colorCount: used.size,
+        colors: [...used].sort((a, b) => a - b),
+        fillRatio: rc.main.cover,
+        patternCount: decos.length,
+        balance: total ? Math.abs(left - right) / total : 0,
+        left, right
+      };
+      return statsCache;
     }
 
     // ------------------------------------------------------------ 落笔
@@ -1056,6 +1365,24 @@
       g.drawImage(layers.player, INNER.x, INNER.y);
       g.drawImage(layers.preview, INNER.x, INNER.y);
       g.drawImage(glass, 0, 0);
+      // 接力端点：一闪一闪的小圈，只走屏幕层。她起的笔在 assist 层，
+      // 这一圈只是告诉玩家「从这儿接」，淡完为止（§1.3）。
+      if (relayHint && relayHint.alpha > 0.02) {
+        const pulse = 0.62 + 0.38 * Math.sin(now / 150);
+        const x = INNER.x + relayHint.x, y = INNER.y + relayHint.y;
+        g.save();
+        g.globalAlpha = Math.min(1, relayHint.alpha) * pulse;
+        g.strokeStyle = "#ffd9a0";
+        g.fillStyle = "#ffd9a0";
+        g.lineWidth = 1.5;
+        g.setLineDash([2, 2]);
+        g.beginPath();
+        g.arc(x, y, 5.5, 0, Math.PI * 2);
+        g.stroke();
+        g.setLineDash([]);
+        g.fillRect(Math.round(x) - 1, Math.round(y) - 1, 2, 2);
+        g.restore();
+      }
       // 选中框画在屏幕上而不是图层里：它不该被导出，也不该被橡皮碰到
       if (!st.locked && st.tool === "stamp" && !drag && st.sel != null) {
         const d = findDeco(st.sel);
@@ -1102,6 +1429,8 @@
         regions: { ...regions() },
         chars: st.chars,
         span: st.span,
+        // §1.1：主题跟着板子一起存。旧存档没有这个字段，恢复时按读书周兜底。
+        theme: themeId,
         ts: Date.now()
       };
       try { localStorage.setItem(SAVE_KEY, JSON.stringify(payload)); } catch (e) { /* 存不下就算了 */ }
@@ -1112,6 +1441,10 @@
       let data = null;
       try { data = JSON.parse(localStorage.getItem(SAVE_KEY) || "null"); } catch (e) { data = null; }
       if (!data || !data.png) return Promise.resolve(false);
+      // 先恢复主题：底稿、图案序、起始粉笔色都跟着它走。没有 theme 的旧存档
+      // 走读书周——不清档、不报错，画和原来一样能接着画。
+      const wanted = (data.theme && THEMES[data.theme]) ? data.theme : THEME_FALLBACK;
+      if (wanted !== themeId) applyTheme(wanted);
       return new Promise((res) => {
         const im = new Image();
         im.onload = () => {
@@ -1164,6 +1497,7 @@
       st.sel = null;
       drag = null;
       cur = null;
+      relayHint = null;
       history.length = 0;
       redoStack.length = 0;
       st.chars = 0; st.span = 0;
@@ -1254,20 +1588,44 @@
       inZone(x, y) { return inDecoZone(x, y); }
     };
 
+    /** 底稿主图的指纹：同一个主题两次调用一致，换主题一定不同（自检用）。 */
+    function ghostPicHash() {
+      const c = (picReady && pic) ? pic : (ghostArt && ghostArt.main);
+      if (!c) return 0;
+      try {
+        const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+        let h = 2166136261;
+        for (let i = 0; i < d.length; i += 17) {
+          h ^= d[i];
+          h = Math.imul(h, 16777619);
+        }
+        return h >>> 0;
+      } catch (e) { return 0; }
+    }
+
     const api = {
-      W, H, INNER, FRAME, BW, BH, COLORS, REGION, EDGES, NEED,
+      W, H, INNER, FRAME, BW, BH, COLORS, REGION, EDGES, NEED, GHOST_PIC,
       PATTERNS: PATTERN_LIST, PAT,
       layers, assist,
       down, move, up, hover,
       undo, redo,
       commitText,
-      regions, allDone,
+      regions, allDone, stats,
       render, toPNG, save, restoreSave, clearAll,
       playerInk, inkMap,
       decos: () => decos,
       placePattern, moveDeco, removeDeco, setReveal,
       nudgeSelected, removeSelected,
       state: st,
+      // ---- 主题（§1.1）与结算（§1.5）
+      theme() { return themeId; },
+      themeInfo,
+      themePatterns,
+      setTheme(id) { applyTheme(id); },
+      stats,
+      // ---- 接力端点高亮（§1.3）
+      setRelayHint(hint) { setRelayHint(hint); },
+      relayHint() { return relayHint ? { ...relayHint } : null; },
       setTool(t) { st.tool = t; st.sel = t === "stamp" ? st.sel : null; emit("change", st); },
       setColor(i) { st.colorIndex = i; st.color = COLORS[i].hex; emit("change", st); },
       setWidth(w) { st.width = w; emit("change", st); },
@@ -1280,7 +1638,11 @@
       ghostState() {
         return {
           on: ghostOn, alpha: GHOST_ALPHA, fade: { ...ghostFade }, target: { ...ghostTarget },
-          pic: picReady ? { ...GHOST_PIC } : null
+          pic: picReady ? { ...GHOST_PIC } : null,
+          theme: themeId,
+          ghostKey: themeInfo().ghostKey,
+          // 画稿指纹：主题换了底稿必换，自检用它对比 448×240 的构图
+          picHash: ghostPicHash()
         };
       },
       /** 画稿在板面上的方框（板面坐标）。没加载上就是 null。 */

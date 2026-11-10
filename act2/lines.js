@@ -55,12 +55,25 @@
       "你画的线很好看，我沿着它慢慢涂。",
       "差一点就好了，我来补上。"
     ],
-    // 递粉笔
-    chalk: [
-      "要不要试试这支？颜色很柔和。",
-      "这支粉笔还没用过，给你。",
-      "这里换一点颜色，可能会很好看。"
-    ],
+    // 递粉笔（§1.4）：一改二选一。她递两支，玩家挑一支自用，
+    // 她拿另一支去补装饰区——所以台词不再是「给你一支」，而是「你挑」。
+    //   offer  两支摆在面前时说的话（{a}/{b} 换成颜色名）
+    //   picked 玩家选了某支之后她说的话——按颜色分句，她说的是自己手里那支
+    chalk: {
+      offer: [
+        "我拿了两支：{a}和{b}。你挑一支。",
+        "这支{a}，这支{b}。你要哪个？我去用另一支补角落。",
+        "粉笔就剩这两支了。{a}，还是{b}？"
+      ],
+      picked: {
+        "白": ["那这支白我拿着。角落有点空，我去补两笔。"],
+        "黄": ["好，黄的给你。我拿另一支，去下面添点东西。"],
+        "粉": ["粉的归你。我用这支，把角落里那个小圈补上。"],
+        "蓝": ["蓝的给你。我手里这支刚好配得上边线。"],
+        "绿": ["绿的留下。我去装饰带补一点，颜色对得上。"],
+        "橙": ["这支橙我用。你安心画你的，角落交给我。"]
+      }
+    },
     // 玩家停手
     nudge: [
       "在想画什么吗？我等你。",
@@ -92,6 +105,27 @@
     // 她在忙，别催
     busy: [
       "等一下，我这笔还没写完。"
+    ],
+    // 接力描线（§1.3）：她在主图区起一小笔，把末端留给玩家接。
+    relay: [
+      "这里我起个头，你接下去。",
+      "我留了一小截，你顺着往下画。",
+      "起笔我替你搭好，后面交给你。",
+      "接这里——剩下的你比我顺。"
+    ],
+    // 椅子描顶边（§1.2）：她提议站椅子画顶边，以及画完那两句专属对白。
+    chair: [
+      "上面的边我够不着……我踩一下椅子，你帮我看着点。",
+      "你扶稳，我上去把顶边补完。"
+    ],
+    chairDone: [
+      "刚才那一下，椅子晃得厉害。",
+      "……有你在我下面看着，我就不慌了。"
+    ],
+    // 椅子事件结束、镜头退回来之后，字幕轮播重新起手的那句
+    chairAfter: [
+      "顶边补上了，接下来画哪？",
+      "上面那截齐了，你继续。"
     ]
   };
 
@@ -282,6 +316,212 @@
       ["朱里", "趁还没擦，多画两笔。"]]
   ];
 
+  /* ---------------------------------------------------------------- 主题（§1.1）
+   *
+   * 主题是一份数据，不是一个 if：底稿构图（ghost）、图案推荐组（patterns）、
+   * 主色调（colorIndex）、她的闲聊话题包（chat）、完成台词（done）。
+   * `board.js` 按 ghost 画主图底稿、按 patterns 排图案面板与她的添图案偏好、
+   * 按 colorIndex 给一支起始粉笔；`scene2.js` 负责让玩家选、把主题写进存档。
+   *
+   * 旧存档没有 theme 字段时一律走 reading（读书周）——这一版之前的板子
+   * 默认就是现在这套「人像 + 三色」的稿，兜底等于保持旧玩家看到的画面不变。
+   */
+  const THEMES = {
+    sports: {
+      id: "sports",
+      name: "运动会",
+      colorIndex: 5,                 // 橙：跑道的颜色
+      ghost: "track",                // board.js：跑道 + 冲线的小人
+      patterns: ["ball", "flag", "sun", "grass", "star", "cloud", "wave", "flower", "note", "heart"],
+      pick: "运动会？好。我先勾了条跑道和冲线的位置。",
+      done: "运动会这块板，画完像能听见哨声。",
+      chat: [
+        [["朱里", "运动会那天你要跑什么。"],
+          ["我", "八百。"],
+          ["朱里", "我给你喊。"],
+          ["我", "别喊，丢人。"]],
+        [["朱里", "接力棒我拿过最后一棒。"],
+          ["我", "厉害。"],
+          ["朱里", "掉棒了。"],
+          ["我", "……行吧。"]],
+        [["我", "拉拉队服是不是有点亮。"],
+          ["朱里", "亮才看得见。"],
+          ["我", "看得见谁摔。"],
+          ["朱里", "……闭嘴。"]]
+      ]
+    },
+    reading: {
+      id: "reading",
+      name: "读书周",
+      colorIndex: 0,                 // 白：旧存档的默认
+      ghost: "portrait",
+      patterns: ["book", "pencil", "note", "leaf", "star", "moon", "snow", "flower", "cloud", "dot3"],
+      pick: "读书周啊。那我就照原来那张人像的稿来。",
+      done: "读书周这块板，看着安安静静的，挺好。",
+      chat: [
+        [["朱里", "读书周要交读后感。"],
+          ["我", "你写了多少。"],
+          ["朱里", "标题写了。"],
+          ["我", "正文呢。"],
+          ["朱里", "正文在标题里。"]],
+        [["朱里", "图书馆靠窗那排位置最好。"],
+          ["我", "你去抢过？"],
+          ["朱里", "抢过三次，两次睡着了。"]],
+        [["我", "你在看什么书。"],
+          ["朱里", "封面好看的。"],
+          ["我", "内容呢。"],
+          ["朱里", "内容没封面好看。"]]
+      ]
+    },
+    graduation: {
+      id: "graduation",
+      name: "毕业季",
+      colorIndex: 2,                 // 粉：寄语和花的颜色
+      ghost: "cap",                  // board.js：学士帽 + 纸飞机
+      patterns: ["star", "heart", "balloon", "moon", "note", "flower", "wave", "cloud", "dot3", "leaf"],
+      pick: "毕业季。那我把帽子和纸飞机的稿先打上。",
+      done: "毕业季这块板，画着画着，好像有点舍不得。",
+      chat: [
+        [["朱里", "毕业照那天要穿白衬衫。"],
+          ["我", "我没有。"],
+          ["朱里", "我借你。"],
+          ["我", "你两件？"],
+          ["朱里", "我哥的。"]],
+        [["朱里", "写同学录别写「前程似锦」。"],
+          ["我", "那写什么。"],
+          ["朱里", "写「别忘了我」。"],
+          ["我", "……你确定？"]],
+        [["我", "毕业季的黑板报要写寄语。"],
+          ["朱里", "你想写什么。"],
+          ["我", "还没想好。"],
+          ["朱里", "那就先画完再说。"]]
+      ]
+    }
+  };
+  const THEME_ORDER = ["sports", "reading", "graduation"];
+  const THEME_FALLBACK = "reading";
+
+  function themeOf(id) {
+    return THEMES[id] || THEMES[THEME_FALLBACK];
+  }
+
+  /* ---------------------------------------------------------------- 结算评价（§1.5）
+   *
+   * 完成时她评价的是**这幅画本身**，不是「你们真棒」：每条模板都带一个
+   * `when(stats)`，只有板上真的长成那样才会被选中，台词里带实测指标。
+   * `board.stats()` 给出 colorCount / fillRatio / patternCount / balance 四项，
+   * 外加 left/right 原始像素数（调试与自检用）。
+   *
+   * 四组（配色 / 填充 / 对称 / 装饰）必定各命中一条，所以候选永远 ≥ 4 条，
+   * 从中挑 3 条说。挑法用种子伪随机，同一块板同一主题结果可复现（§0.5）。
+   */
+  const DONE_EVAL = [
+    // ---- 配色
+    {
+      id: "color-many",
+      when: (s) => s.colorCount >= 3,
+      text: (s) => `用了${s.colorCount}种粉笔色，比我一个人画的时候热闹。`
+    },
+    {
+      id: "color-two",
+      when: (s) => s.colorCount === 2,
+      text: () => "两支粉笔就够用了，颜色反而干净。"
+    },
+    {
+      id: "color-one",
+      when: (s) => s.colorCount <= 1,
+      text: () => "只用了一种颜色，倒像课前打的那张稿。"
+    },
+    // ---- 主图填充
+    {
+      id: "fill-high",
+      when: (s) => s.fillRatio >= 0.16,
+      text: (s) => `中间那块填得很满（${Math.round(s.fillRatio * 100)}%），站远看很扎实。`
+    },
+    {
+      id: "fill-low",
+      when: (s) => s.fillRatio < 0.16,
+      text: (s) => `中间留白不少（${Math.round(s.fillRatio * 100)}%），反而透气。`
+    },
+    // ---- 左右平衡
+    {
+      id: "balance-even",
+      when: (s) => s.balance <= 0.2,
+      text: () => "左右差不多重，看着很稳。"
+    },
+    {
+      id: "balance-right-heavy",
+      when: (s) => s.balance > 0.2 && s.left < s.right,
+      text: () => "右边比左边密，重心偏了一点，倒也不难看。"
+    },
+    {
+      id: "balance-left-heavy",
+      when: (s) => s.balance > 0.2 && s.left >= s.right,
+      text: () => "左边压得重，右边留白，像故意留的。"
+    },
+    // ---- 装饰
+    {
+      id: "pattern-many",
+      when: (s) => s.patternCount >= 4,
+      text: (s) => `装饰摆了${s.patternCount}个，边角都热闹起来了。`
+    },
+    {
+      id: "pattern-few",
+      when: (s) => s.patternCount < 4,
+      text: (s) => (s.patternCount ? `只放了${s.patternCount}个图案，眼睛能歇一歇。` : "一个图案都没放，干净得像张草稿。")
+    }
+  ];
+
+  // 自己写的伪随机（和 act5/ball.js 的 makeRnd 同式）：挑评价句要可复现
+  function makeRnd(seed) {
+    let s = seed >>> 0;
+    return function () { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
+  }
+
+  /** 把 stats + 主题搓成一个稳定的种子：同一块板挑出来的评价句每次一样。 */
+  function evalSeed(stats, themeId) {
+    const nums = [stats.colorCount, Math.round(stats.fillRatio * 1000),
+      stats.patternCount, Math.round(stats.balance * 1000), stats.left, stats.right];
+    let h = 2166136261;
+    const str = themeId + "|" + nums.join(",");
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  /**
+   * 从达标模板里挑 2–3 句。
+   * 返回 [{ id, text }]，`text` 就是实际说出口的整句——场景把这一份同时
+   * 写进存档（evals），第四幕不 import 本文件也能直接念出来。
+   */
+  function pickEvals(stats, themeId, max) {
+    const list = DONE_EVAL.filter((t) => {
+      try { return !!t.when(stats); } catch (e) { return false; }
+    });
+    const n = Math.min(max || 3, Math.max(2, Math.min(list.length, 3)), list.length);
+    const rnd = makeRnd(evalSeed(stats, themeId));
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      const t = list[i]; list[i] = list[j]; list[j] = t;
+    }
+    return list.slice(0, n).map((t) => ({ id: t.id, text: t.text(stats) }));
+  }
+
+  /** 递粉笔二选一：把 {a}/{b} 换成颜色名。 */
+  function chalkOffer(nameA, nameB) {
+    const pool = LINES.chalk.offer;
+    const t = pool[Math.floor(Math.random() * pool.length)];
+    return t.replace("{a}", nameA).replace("{b}", nameB);
+  }
+
+  /** 玩家选了某支之后她说的话（她说的是自己手里那支）。 */
+  function chalkPicked(chosenName) {
+    const pool = LINES.chalk.picked[chosenName] || LINES.chalk.picked["白"];
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
   const lastPicked = {};
   function pick(key, avoid) {
     const pool = LINES[key] || [];
@@ -296,32 +536,63 @@
   /* 抽一段对话：洗一副牌，抽完再洗。
    *
    * 原来是纯随机，二十几段里连抽中同一段两次是常事——刚聊完演唱会又聊演唱会，
-   * 立刻露馅。洗牌袋保证一轮之内不重复，一轮走完才重新开始。 */
+   * 立刻露馅。洗牌袋保证一轮之内不重复，一轮走完才重新开始。
+   *
+   * 选了主题之后，这一轮里会混进该主题的三段话题（运动会 / 读书周 / 毕业季），
+   * 主题换了就重洗——不然换主题后还在聊上一个主题，露馅。 */
   let bag = [];
-  let lastChat = -1;
+  let lastChatKey = "";
+  let activeTheme = THEME_FALLBACK;
+
+  function setTheme(id) {
+    const t = themeOf(id);
+    if (t.id === activeTheme) return t;
+    activeTheme = t.id;
+    bag = [];
+    lastChatKey = "";
+    return t;
+  }
+  function currentTheme() { return themeOf(activeTheme); }
+
+  function themeChat() {
+    return (THEMES[activeTheme] && THEMES[activeTheme].chat) || [];
+  }
+
   function exchange() {
-    if (!CHAT.length) return [];
+    const pool = CHAT.concat(themeChat());
+    if (!pool.length) return [];
     if (!bag.length) {
-      bag = CHAT.map((_, i) => i);
+      bag = pool.map((_, i) => i);
       for (let i = bag.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         const t = bag[i]; bag[i] = bag[j]; bag[j] = t;
       }
       // 新一轮的第一段别接着上一轮的尾巴
-      if (bag.length > 1 && bag[0] === lastChat) { bag[0] = bag[1]; bag[1] = lastChat; }
+      if (bag.length > 1 && keyOf(pool[bag[0]]) === lastChatKey) {
+        const t = bag[0]; bag[0] = bag[1]; bag[1] = t;
+      }
     }
     const i = bag.shift();
-    lastChat = i;
-    return CHAT[i].map((q) => [q[0], q[1]]);
+    lastChatKey = keyOf(pool[i]);
+    return pool[i].map((q) => [q[0], q[1]]);
   }
+  function keyOf(ex) { return ex.map((q) => q[1]).join("|"); }
 
   /** 换话题时的统计：有多少段完全不提这块板。自检和文档用。 */
   function chatStats() {
     const boardWords = /画|板|粉笔|稿|图案|涂/;
-    const about = CHAT.filter((ex) => ex.some((q) => boardWords.test(q[1]))).length;
-    return { total: CHAT.length, aboutBoard: about, daily: CHAT.length - about };
+    const all = CHAT.concat(themeChat());
+    const about = all.filter((ex) => ex.some((q) => boardWords.test(q[1]))).length;
+    return {
+      total: all.length, aboutBoard: about, daily: all.length - about,
+      main: CHAT.length, theme: themeChat().length, themeId: activeTheme
+    };
   }
 
   global.ACT2 = global.ACT2 || {};
-  global.ACT2.Lines = { LINES, CHAT, pick, exchange, chatStats };
+  global.ACT2.Lines = {
+    LINES, CHAT, THEMES, THEME_ORDER, THEME_FALLBACK, DONE_EVAL,
+    pick, exchange, chatStats, themeOf, setTheme, currentTheme,
+    pickEvals, chalkOffer, chalkPicked
+  };
 })(window);
