@@ -71,15 +71,22 @@
         <div class="chip" data-who="friend"><i class="face f-friend"></i><b>由乃</b></div>
       </div>
       <div class="wg-round" id="wgRound"></div>
-      <!-- 猜人物：左边一张剪影（人形轮廓 + 标志性道具），右边是主持人的话和线索 -->
+      <!-- 猜人物：左边一张剪影（人形轮廓 + 标志性道具），右边是主持人的话和线索。
+           剪影画在 canvas 上：老题把 PNG 先画进来再上马赛克蒙版，新题直接按 fig 数据画；
+           #wgSil 只做 PNG 加载的中转，CSS 里 display:none，不再直接显示。 -->
       <div class="wg-body">
         <div class="wg-figure" id="wgFigure">
           <span class="wg-cat" id="wgCat"></span>
           <img id="wgSil" src="" alt="" width="96" height="96">
+          <canvas id="wgSilCv" width="96" height="96" aria-label="剪影"></canvas>
         </div>
         <div class="wg-main">
           <div class="wg-host" id="wgHost"></div>
+          <!-- 抢答窗：线索出来之后 2.2 秒，条走完她俩就开口 -->
+          <div class="wg-buzz" id="wgBuzz" hidden><span>抢答</span><i></i></div>
           <ul class="wg-clues" id="wgClues"></ul>
+          <!-- 线索类别：首条固定，之后两条由玩家挑先听外形 / 经历 / 台词 -->
+          <div class="wg-pick" id="wgPick" hidden></div>
           <div class="wg-say" id="wgSay"></div>
         </div>
       </div>
