@@ -61,6 +61,9 @@ const S = (page) => page.evaluate(() => {
     duelGuard: g && g.duelGuard,
     duelT: g && g.duelT,
     stumbleT: g && g.stumbleT,
+    // 新射门手感：蓄力状态和瞄准高度（门将只扑低球，要抬到 0.54 以上再松手）
+    charging: g && g.charging,
+    aimZ: g && g.aimZ,
     // 两块新增的插曲面板：不点也能靠超时过去，但这条链路要真的点一次
     give: !document.getElementById("giveBack").hidden,
     swap: !document.getElementById("wgSwap").hidden,
@@ -328,21 +331,30 @@ const S = (page) => page.evaluate(() => {
       if (s.stumbleT > 0) { await hold(null); await page.waitForTimeout(60); continue; }
 
       if (s.holder === "me") {
-        if (s.me.d < 0.80) {
+        if (s.stumbleT > 0) { await hold(null); await page.waitForTimeout(50); continue; }
+        if (s.me.d < 0.84) {
           const keys = ["KeyW"];
           if (s.me.x < 0.44) keys.push("KeyD");
           else if (s.me.x > 0.56) keys.push("KeyA");
           await hold(keys);
-          await page.waitForTimeout(45);
+          await page.waitForTimeout(40);
           continue;
         }
         await hold(null);
         await page.keyboard.down("Space");
         await page.keyboard.down("KeyW");
-        await page.waitForTimeout(560);
+        // §6.2 门将只扑低球（落点 z < 0.50）：一直抬到 aimZ ≥ 0.54 再松手。
+        // 被贴身压迫时蓄力会变慢，所以看高度、不看按了多久。
+        const tShot = Date.now();
+        while (Date.now() - tShot < 2600) {
+          await page.waitForTimeout(60);
+          const c = await S(page);
+          if (c.holder !== "me" || !c.charging) break;
+          if (c.aimZ >= 0.54) break;
+        }
         await page.keyboard.up("KeyW");
         await page.keyboard.up("Space");
-        await page.waitForTimeout(120);
+        await page.waitForTimeout(150);
         continue;
       }
 
