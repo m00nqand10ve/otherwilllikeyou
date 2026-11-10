@@ -481,11 +481,16 @@ button:disabled { opacity: .38; cursor: default; }
   width: 96px;
 }
 
-#wgSil {
+/* 剪影画在 canvas 上（老题的 PNG 先画进来再上马赛克蒙版）；
+   #wgSil 只做 PNG 加载中转，不再直接显示。 */
+#wgSil { display: none; }
+
+#wgSilCv {
   display: block;
   width: 96px;
   height: 96px;
-  background: rgba(18, 14, 20, .45);
+  /* 比面板亮一档的底：近黑剪影压在深色面板上会看不见（老 PNG 也只剩一顶彩色帽子） */
+  background: #574c58;
   border: 1px solid #4a3d4f;
   border-radius: 3px;
   image-rendering: pixelated;
@@ -544,6 +549,55 @@ button:disabled { opacity: .38; cursor: default; }
   background: #ffd497;
 }
 @keyframes clueIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+/* 每条线索前面的类别小标签：外形 / 经历 / 台词 */
+.wg-clues li .wg-ck {
+  display: inline-block;
+  margin-right: 7px;
+  padding: 0 5px;
+  font-size: 11px;
+  letter-spacing: .1em;
+  color: #c9b19b;
+  border: 1px solid #4a3d4f;
+  border-radius: 2px;
+  vertical-align: 1px;
+}
+
+/* 抢答窗：一条 2.2 秒走完的细条，走完她俩就开口 */
+.wg-buzz {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -2px 0 8px;
+  font-size: 11px;
+  letter-spacing: .18em;
+  color: #ffd497;
+}
+.wg-buzz[hidden] { display: none; }
+.wg-buzz i {
+  display: block;
+  flex: 1;
+  height: 3px;
+  background: #ffd497;
+  transform-origin: left center;
+  transform: scaleX(1);
+}
+
+/* 线索类别选择：先听哪一类 */
+.wg-pick {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 8px;
+}
+.wg-pick[hidden] { display: none; }
+.wg-pick button {
+  padding: 7px 12px;
+  font-size: clamp(13px, 1.2vw, 16px);
+  background: #3a3040;
+  border: 1px solid #7d6680;
+}
+.wg-pick button:hover { background: #55435f; border-color: #ffd497; }
 
 .wg-say {
   min-height: 1.5em;
@@ -1031,7 +1085,7 @@ button:disabled { opacity: .38; cursor: default; }
   .wg-card { padding: 12px 12px 14px; }
   .wg-body { gap: 10px; }
   .wg-figure { width: 72px; }
-  #wgSil { width: 72px; height: 72px; }
+  #wgSilCv { width: 72px; height: 72px; }
   .wg-opts { grid-template-columns: 1fr; }
   .face { width: 44px; height: 34px; }
   .f-girl { background-size: 1452px 66px; }
