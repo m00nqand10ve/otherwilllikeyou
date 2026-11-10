@@ -24,10 +24,70 @@
     boy: "../../assets/characters/boy/v2/boy_sheet_v2.png",
     girl: "../../assets/characters/girl/v2/girl_sheet_v2.png"
   };
+  // ---- 前两幕留下的回响 -------------------------------------------------
+  // 第二幕的结算评价（主题 + 她当时说的那句）和第三幕的广播结果都存在
+  // localStorage 里；这里是不同页面，不能 import 前两幕的台词表，只读存档。
+  // 旧存档没有这些键时一律走原来的台词，不报错、不降级体验。
+  function readSave(key) {
+    try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : null; } catch { return null; }
+  }
+  const ACT2_EVAL = readSave("our-story-act2-board-eval-v1");
+  const ACT3_RESULT = readSave("act3-result-v1");
+
+  // 三档：接力全接住 / 被她补位 ≥2 次 / 一般完成。只换台词，不换走向。
+  const ACT3_VARIANT = (() => {
+    const r = ACT3_RESULT;
+    if (!r) return "normal";
+    const total = Number(r.relaysTotal) || 0;
+    const caught = Number(r.relaysCaught) || 0;
+    if (total > 0 && caught >= total) return "sync";
+    if ((Number(r.rescues) || 0) >= 2) return "rescued";
+    return "normal";
+  })();
+
+  const BOARD_MEMORY_TEXT = (() => {
+    const e = ACT2_EVAL;
+    if (!e || !e.themeName) return "画黑板报的时候，她把粉笔递给我，自己留下来补那些细细的边。";
+    const said = e.evals && e.evals[0] && e.evals[0].text ? "「" + e.evals[0].text + "」" : "这样就好。";
+    return "画黑板报的时候，她说这期做「" + e.themeName + "」。后来她退开两步看了看，说" + said + "。";
+  })();
+
+  /** 和臣接过话筒之后那几句，按广播的结果换一版。 */
+  function firstWordLines() {
+    if (ACT3_VARIANT === "sync") {
+      return [
+        ["和臣", "刚才开头，我是不是念得太快了？"],
+        ["朱里", "有一点。后面你等我停下，就正好了。"],
+        ["和臣", "我还以为没接上。"],
+        ["朱里", "接上了呀。中间一次也没让我替你。"],
+        ["和臣", "……你连这个都数。"],
+        ["朱里", "外面安静了。走一会儿？"]
+      ];
+    }
+    if (ACT3_VARIANT === "rescued") {
+      return [
+        ["和臣", "刚才中间，我是不是漏了两句？"],
+        ["朱里", "嗯。我替你补上了。"],
+        ["和臣", "……对不住。"],
+        ["朱里", "补上了就算数。下次别漏。"],
+        ["和臣", "我记住了。"],
+        ["朱里", "外面安静了。走一会儿？"]
+      ];
+    }
+    return [
+      ["和臣", "刚才开头，我是不是念得太快了？"],
+      ["朱里", "有一点。后面你等我停下，就正好了。"],
+      ["和臣", "我还以为没接上。"],
+      ["朱里", "接上了呀。"],
+      ["和臣", "……嗯。"],
+      ["朱里", "外面安静了。走一会儿？"]
+    ];
+  }
+
   const MEMORIES = [
     { text: "靠在护栏上，风吹过来，我的脑子里却忽然闪过好多小事。" },
     { src: SRC.doorwayMemory, text: "教室门口，朱里朝我挥手。那时我还没想到，自己会越来越期待听见她叫我的名字。" },
-    { src: SRC.boardMemory, text: "画黑板报的时候，她把粉笔递给我，自己留下来补那些细细的边。" },
+    { src: SRC.boardMemory, text: BOARD_MEMORY_TEXT },
     { src: SRC.broadcastMemory, text: "广播室里，红灯亮起。她坐在旁边，等我把那句话说完。" },
     { src: SRC.snack, text: "还有刚才那张被风吹走的稿纸，和她留给我的最后一块饼干。" },
     { text: "这些事都很小。可不知从什么时候起，每次想起那段日子，我总会先想起她。" },
@@ -155,7 +215,7 @@
     if (next === "exit") { boy.x = 380; girl.x = 415; autoWalk = false; paperCaught = false; }
     if (next === "firstWords") {
       boy.x = 320; girl.x = 355;
-      say([["和臣", "刚才开头，我是不是念得太快了？"], ["朱里", "有一点。后面你等我停下，就正好了。"], ["和臣", "我还以为没接上。"], ["朱里", "接上了呀。"], ["和臣", "……嗯。"], ["朱里", "外面安静了。走一会儿？"]], () => enter("doorWalk"));
+      say(firstWordLines(), () => enter("doorWalk"));
     }
     if (["railingWalk", "paperWalk", "lullWalk", "afterSnack", "stairWalk"].includes(next)) {
       boy.x = 395; girl.x = 430;
@@ -364,5 +424,12 @@
     .then(() => enter("exit"))
     .catch((err) => { ending.hidden = false; ending.querySelector("h1").textContent = "场景资源加载失败"; ending.querySelector("p").textContent = err.message; });
   requestAnimationFrame(loop);
-  window.__afterBroadcast = { get scene() { return scene; }, get dialogIndex() { return dialogIndex; }, get boyX() { return boy.x; }, get girlX() { return girl.x; }, enter };
+  window.__afterBroadcast = {
+    get scene() { return scene; }, get dialogIndex() { return dialogIndex; },
+    get boyX() { return boy.x; }, get girlX() { return girl.x; }, enter,
+    // 自检与调试：前两幕的回响读到了什么
+    get act3Variant() { return ACT3_VARIANT; },
+    get boardMemoryText() { return MEMORIES[2].text; },
+    get firstWordsLines() { return firstWordLines(); }
+  };
 })();

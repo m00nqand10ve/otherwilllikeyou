@@ -126,6 +126,55 @@ const path = require("node:path");
     if (captionSize < 28) throw new Error(`行走字幕字号仍偏小：${captionSize}px`);
     const narrationSize = await page.evaluate(() => parseFloat(getComputedStyle(document.getElementById("hint")).fontSize));
     if (narrationSize < 28) throw new Error(`旁白字号仍偏小：${narrationSize}px`);
+    // ---- 前两幕的回响：第二幕主题/评价 + 第三幕三档开场变体（只读存档）
+    const withSaves = async (seed) => {
+      const ctx = await browser.newContext();
+      const p = await ctx.newPage({ viewport: { width: 1280, height: 720 } });
+      await p.goto(url);
+      await p.evaluate(seed);
+      await p.reload();
+      await p.waitForFunction(() => window.__afterBroadcast?.scene === "exit", null, { timeout: 60000 });
+      const got = await p.evaluate(() => ({
+        variant: window.__afterBroadcast.act3Variant,
+        memory: window.__afterBroadcast.boardMemoryText,
+        first: window.__afterBroadcast.firstWordsLines
+      }));
+      await ctx.close();
+      return got;
+    };
+
+    const sync = await withSaves(() => {
+      localStorage.clear();
+      localStorage.setItem("our-story-act2-board-eval-v1", JSON.stringify({
+        theme: "sports", themeName: "运动会", evalIds: ["e1"],
+        evals: [{ id: "e1", text: "左边留白多，反而透气" }]
+      }));
+      localStorage.setItem("act3-result-v1", JSON.stringify({
+        difficulty: "演播", relaysCaught: 4, relaysTotal: 4, rescues: 0, maxNoise: 30, syncBoth: true
+      }));
+    });
+    if (sync.variant !== "sync") throw new Error(`接力全接住时 act3 回响档位是 ${sync.variant}`);
+    if (!sync.first[3][1].includes("一次也没让我替你")) throw new Error("接力全接住时开场台词没有换成对应变体");
+    if (!sync.memory.includes("运动会") || !sync.memory.includes("左边留白多")) {
+      throw new Error("boardMemory 没有引用第二幕的主题与评价句");
+    }
+
+    const rescued = await withSaves(() => {
+      localStorage.clear();
+      localStorage.setItem("act3-result-v1", JSON.stringify({
+        difficulty: "电台", relaysCaught: 1, relaysTotal: 4, rescues: 3, maxNoise: 85, syncBoth: false
+      }));
+    });
+    if (rescued.variant !== "rescued") throw new Error(`被补位时 act3 回响档位是 ${rescued.variant}`);
+    if (!rescued.first[1][1].includes("替你补上")) throw new Error("被补位时开场台词没有换成对应变体");
+    if (!rescued.memory.includes("黑板报")) throw new Error("没有第二幕存档时 boardMemory 没有回退旧台词");
+
+    const fallback = await withSaves(() => { localStorage.clear(); });
+    if (fallback.variant !== "normal") throw new Error(`没有存档时 act3 回响档位是 ${fallback.variant}`);
+    if (fallback.memory !== "画黑板报的时候，她把粉笔递给我，自己留下来补那些细细的边。") {
+      throw new Error("没有存档时 boardMemory 没有回退旧台词");
+    }
+
     if (errors.length) throw new Error(errors.join("\n"));
     console.log(JSON.stringify({ ok: true, scene: await page.evaluate(() => window.__afterBroadcast.scene), errors }));
   } finally {
