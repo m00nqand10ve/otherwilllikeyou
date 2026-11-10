@@ -29,15 +29,263 @@
     railing: { bg: "railing", walk: [52, 466], y: FLOOR, right: "stair", name: "楼上 · 走廊" }
   };
 
-  // 卡在楼梯口窗台上。楼梯间的窗台横在 y≈150、x 165..500，这一格是空的，
-  // 放得下，而且从地面看过去正好在视线上方一点——不走近不会注意到。
-  // standY 是玩家站在地上能看窗台的那条线，不是卡本身的高度。
-  const CARD = { scene: "stair", x: 300, y: 150, standY: 214 };
+  // 卡在楼梯口窗台上 —— 首通固定在这儿（CARD_SPOTS[0]），重玩按游玩次轮换。
+  // 每个落点配一张线索链表：八处观察点里哪四处产出真线索、每条线索钉在哪、
+  // 它是「她上午走过的路」里的第几站（step 1/2/3）。仅凭这组真线索就能唯一
+  // 确定落点——自检里用纯数据求解验这一条，不靠玩家背台词。
+  const CARD_SPOTS = [
+    {
+      // 0 · 首通（现行）
+      id: "stairSill", name: "楼梯口窗台", place: "楼梯口的窗台", short: "窗台",
+      scene: "stair", x: 300, y: 150, standY: 214,
+      findHint: "E · 看看窗台",
+      findFirst: "窗台上落着一层薄灰。靠外那一角，压着一张卡。",
+      dest: "windowsill",
+      route: ["classroom", "cooler", "windowsill"],
+      hint3: "楼梯口那个窗台。你去看一眼就知道了。",
+      truePoints: ["door", "sill", "plate", "can"],
+      variants: {
+        door: [{
+          kind: "see", pin: "classroom", step: 1,
+          text: "教室里的桌子没收，笔搁在练习册上，笔帽没盖——她是先出去的。"
+        }],
+        plate: [{
+          kind: "see", pin: "classroom", step: 1,
+          text: "门边的小牌子下沿被指甲刮花了一小块——她出门的时候从这儿过。"
+        }],
+        sill: [{
+          kind: "remember", pin: "cooler", step: 2,
+          text: "她说过，卡只在接水的时候拿出来——接水是出去以后的事。"
+        }, {
+          kind: "see", pin: "windowsill", step: 3,
+          text: "左边窗台的灰里有一块干净的长方形印子——最后卡搁在这儿，又被拿走了。"
+        }],
+        can: [{
+          kind: "see", pin: "cooler", step: 2,
+          text: "垃圾桶最上面那个面包袋是今天的——她接水回来路过这儿时还拿着。"
+        }]
+      },
+      answers: {
+        girl: [
+          { text: "朱里说，最后一次刷卡是第二节下课，接水的时候。", pin: "cooler" },
+          { text: "朱里说，去了。接水的时候卡还刷了一下。", pin: "cooler" },
+          { text: "朱里说，卡套是蓝的，挂绳断了——她去监控室问过。", pin: "cctv" }
+        ],
+        friend: [
+          { text: "由乃说，她出去就一会儿，回来的时候手里是空的。", pin: null },
+          { text: "由乃说，她接完水才去窗边站的。", pin: "windowsill" },
+          { text: "由乃说，她没敢说卡落在哪儿，只说刷过卡。", pin: "cooler" }
+        ]
+      },
+      confirms: [
+        { who: "girl", q: 1, point: "sill", pin: "cooler",
+          text: "朱里说卡就是接水时刷的——窗台上那块干净印子，是卡躺过的地方。" },
+        { who: "friend", q: 1, point: "sill", pin: "windowsill",
+          text: "由乃说接完水才去窗边——窗台那块印子对上了，卡最后被人拿走。" }
+      ]
+    },
+    {
+      // 1 · 开水房刷卡机旁（第二轮抽到它）
+      id: "waterReader", name: "开水房刷卡机旁", place: "开水房的刷卡机旁边", short: "刷卡机",
+      scene: "corridor", x: 448, y: 168, standY: 214,
+      findHint: "E · 看看刷卡机旁边",
+      findFirst: "刷卡机的台面上，卡贴着墙根搁着。",
+      dest: "cooler",
+      route: ["classroom", "windowsill", "cooler"],
+      hint3: "开水房那台刷卡机旁边。你去看一眼就知道了。",
+      truePoints: ["door", "sill", "plate", "board"],
+      variants: {
+        door: [{
+          kind: "see", pin: "classroom", step: 1,
+          text: "教室里的桌子没收，笔搁在练习册上，笔帽没盖——她是先出去的。"
+        }],
+        plate: [{
+          kind: "see", pin: "classroom", step: 1,
+          text: "门边的小牌子下沿被指甲刮花了一小块——她出门的时候从这儿过。"
+        }],
+        sill: [{
+          kind: "see", pin: "windowsill", step: 2,
+          text: "左边窗台的灰里有一块干净的长方形印子——她出来以后先在这儿站了一会儿，卡掏出来过。"
+        }, {
+          kind: "remember", pin: "cooler", step: 3,
+          text: "她说过，卡只在接水的时候拿出来——站完窗边才去接的水。"
+        }],
+        board: [{
+          kind: "see", pin: "cooler", step: 3,
+          text: "布告栏上钉着一张「开水房刷卡机又吞卡了」的纸条——她接水的时候卡就是在那儿没的。"
+        }]
+      },
+      answers: {
+        girl: [
+          { text: "朱里说，最后一次刷卡是第二节下课，接完水就没再掏过。", pin: "cooler" },
+          { text: "朱里说，去了。卡在刷卡机上贴了一下。", pin: "cooler" },
+          { text: "朱里说，卡套是蓝的，挂绳断了——她去监控室问过。", pin: "cctv" }
+        ],
+        friend: [
+          { text: "由乃说，她出去就一会儿，回来的时候手里是空的。", pin: null },
+          { text: "由乃说，她先去窗边站了一会儿，才去接的水。", pin: "windowsill" },
+          { text: "由乃说，卡大概是接水的时候落在刷卡机边上的。", pin: "cooler" }
+        ]
+      },
+      confirms: [
+        { who: "girl", q: 1, point: "board", pin: "cooler",
+          text: "朱里说卡在刷卡机上贴了一下——布告栏那张「又吞卡了」的纸条，说的就是她那回。" },
+        { who: "friend", q: 1, point: "sill", pin: "windowsill",
+          text: "由乃说先去窗边——窗台那块干净印子对上了，卡是在那儿拿出来的。" }
+      ]
+    },
+    {
+      // 2 · 布告栏下方
+      id: "underBoard", name: "布告栏下方", place: "布告栏下面", short: "布告栏",
+      scene: "corridor", x: 392, y: 202, standY: 226,
+      findHint: "E · 看看布告栏下面",
+      findFirst: "布告栏底下，靠墙根的地砖上，压着一张卡。",
+      dest: "lostfound",
+      route: ["classroom", "cooler", "lostfound"],
+      hint3: "布告栏下面。你去看一眼就知道了。",
+      truePoints: ["door", "plate", "sill", "board"],
+      variants: {
+        door: [{
+          kind: "see", pin: "classroom", step: 1,
+          text: "教室里的桌子没收，笔搁在练习册上，笔帽没盖——她是先出去的。"
+        }],
+        plate: [{
+          kind: "see", pin: "classroom", step: 1,
+          text: "门边的小牌子下沿被指甲刮花了一小块——她出门的时候从这儿过。"
+        }],
+        sill: [{
+          kind: "remember", pin: "cooler", step: 2,
+          text: "她说过，卡只在接水的时候拿出来——接水是出去以后的事。"
+        }],
+        board: [{
+          kind: "see", pin: "lostfound", step: 3,
+          text: "布告栏最上面新钉的「校园卡挂失补办流程」下沿还翘着——她接完水回来，在这儿停过。"
+        }]
+      },
+      answers: {
+        girl: [
+          { text: "朱里说，接水的时候刷的卡，刷完就塞兜里了。", pin: "cooler" },
+          { text: "朱里说，去了。刷完卡还站在机器旁边缓了一会儿。", pin: "cooler" },
+          { text: "朱里说，卡套是蓝的，挂绳断了——她去监控室问过。", pin: "cctv" }
+        ],
+        friend: [
+          { text: "由乃说，她出去就一会儿，回来的时候手里是空的。", pin: null },
+          { text: "由乃说，她先去接的水，后来才往布告栏那边走。", pin: "cooler" },
+          { text: "由乃说，卡大概是回教室路上丢的，她在布告栏底下站过。", pin: "lostfound" }
+        ]
+      },
+      confirms: [
+        { who: "girl", q: 1, point: "sill", pin: "cooler",
+          text: "朱里说接水时刷的卡——窗台那块干净印子，是卡掏出来又塞回去留下的。" },
+        { who: "friend", q: 2, point: "board", pin: "lostfound",
+          text: "由乃说她在布告栏底下站过——挂失通知下沿还翘着，对上了。" }
+      ]
+    },
+    {
+      // 3 · 楼梯拐角台阶（第二轮抽到它）
+      id: "stairSteps", name: "楼梯拐角台阶", place: "楼梯拐角的台阶上", short: "台阶",
+      scene: "stair", x: 72, y: 228, standY: 238,
+      findHint: "E · 看看台阶",
+      findFirst: "台阶最下面一级，卡卡在缝里，露出一角。",
+      dest: "stair",
+      route: ["classroom", "cooler", "stair"],
+      hint3: "楼梯拐角那几级台阶。你去看一眼就知道了。",
+      truePoints: ["door", "plate", "sill", "rail"],
+      variants: {
+        door: [{
+          kind: "see", pin: "classroom", step: 1,
+          text: "教室里的桌子没收，笔搁在练习册上，笔帽没盖——她是先出去的。"
+        }],
+        plate: [{
+          kind: "see", pin: "classroom", step: 1,
+          text: "门边的小牌子下沿被指甲刮花了一小块——她出门的时候从这儿过。"
+        }],
+        sill: [{
+          kind: "remember", pin: "cooler", step: 2,
+          text: "她说过，卡只在接水的时候拿出来——接水是出去以后的事。"
+        }],
+        rail: [{
+          kind: "guess", pin: "stair", step: 3,
+          text: "扶手上有一道没干的白灰，可能刚有人扶着上过楼。（这是猜的。可她刚接完水，往楼梯这边走了。）"
+        }]
+      },
+      answers: {
+        girl: [
+          { text: "朱里说，接水的时候刷的卡，刷完就攥在手里。", pin: "cooler" },
+          { text: "朱里说，去了。刷卡机就在楼梯拐角那边。", pin: "cooler" },
+          { text: "朱里说，卡套是蓝的，挂绳断了——她去监控室问过。", pin: "cctv" }
+        ],
+        friend: [
+          { text: "由乃说，她出去就一会儿，回来的时候手里是空的。", pin: null },
+          { text: "由乃说，她先接的水，接完往楼梯那边去了。", pin: "cooler" },
+          { text: "由乃说，卡可能是上楼梯的时候掉的。", pin: "stair" }
+        ]
+      },
+      confirms: [
+        { who: "girl", q: 1, point: "sill", pin: "cooler",
+          text: "朱里说接水时刷的卡——窗台那块干净印子，是卡掏出来的时候留下的。" },
+        { who: "friend", q: 2, point: "rail", pin: "stair",
+          text: "由乃说卡可能是在楼梯上掉的——扶手上那道白灰对上了，她确实往楼梯去了。" }
+      ]
+    }
+  ];
+
+  // 收尾里那几句按落点换词：谁都听得出来她在问「哪儿」。
+  const SPOT_TEXT = {
+    stairSill: { echo: "窗台？", low: "……在楼梯口，窗台上。", detail: "压在最外头那一角。", mid: "楼梯口的窗台上。" },
+    waterReader: { echo: "刷卡机？", low: "……在开水房，刷卡机旁边。", detail: "贴着墙根搁着。", mid: "开水房刷卡机旁边。" },
+    underBoard: { echo: "布告栏？", low: "……在布告栏下面。", detail: "靠墙根的地砖上。", mid: "布告栏下面。" },
+    stairSteps: { echo: "台阶上？", low: "……在楼梯拐角的台阶上。", detail: "最下面一级的缝里。", mid: "楼梯拐角的台阶上。" }
+  };
+
+  // 每轮抽哪个落点：按「游玩次」分块，一块 4 场、每块用一个种子洗牌，
+  // 所以同一块里四个落点各来一次、重玩不会连着两次同一个位置。
+  // 首通那一块固定成 [0, 3, 1, 2]：第 0 次（楼梯口窗台）保持不变，
+  // 后面三轮也是同一套顺序——和旧版第一次玩的体验对齐。
+  const SPOT_ORDER = [0, 3, 1, 2];
+  function makeRnd(seed) {          // 和 ball.js / errand.js 同一个确定性伪随机
+    let s = seed >>> 0;
+    return function () { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
+  }
+  const spotBlocks = [SPOT_ORDER];
+  function spotBlockAt(block) {
+    if (spotBlocks[block]) return spotBlocks[block];
+    const rnd = makeRnd(0x51ed270b ^ Math.imul(block + 1, 2654435761));
+    const arr = [0, 1, 2, 3];
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+    }
+    spotBlocks[block] = arr;
+    return arr;
+  }
+  function spotIndexForRun(n) {
+    const block = Math.floor(n / SPOT_ORDER.length);
+    const k = ((n % SPOT_ORDER.length) + SPOT_ORDER.length) % SPOT_ORDER.length;
+    return spotBlockAt(block)[k];
+  }
+
+  // 问人的问题（每人 3 个，答案随这一轮的落点变）。第 3 个问题里，
+  // 朱里那句永远指向监控（不在任何一条答案路线上），是地图上的干扰项。
+  const ASK = {
+    girl: [
+      "最后一次刷卡是什么时候？",
+      "上午去过开水房吗？",
+      "卡套是什么颜色？"
+    ],
+    friend: [
+      "她出去多久？",
+      "她先去的哪儿？",
+      "她说过卡在哪儿丢的吗？"
+    ]
+  };
+  const ASK_NAME = { girl: "朱里", friend: "由乃" };
 
   // 门口站着的两个人。她们不进队伍，就在原地等——G02 是一个人找东西，
-  // 三个人一起翻箱倒柜反而不像话。
+  // 三个人一起翻箱倒柜反而不像话。站得离互动点稍开一点，免得按 E 时
+  // 想看的门缝 / 牌子被「问人」抢掉。
   const GIRL = { key: "girl", x: 238, y: 212, dir: 1, moving: false, phase: 0.4, scale: 1 };
-  const FRIEND = { key: "friend", x: 204, y: 236, dir: 1, moving: false, phase: 0.9, scale: 1 };
+  const FRIEND = { key: "friend", x: 186, y: 236, dir: 1, moving: false, phase: 0.9, scale: 1 };
 
   // ---------------------------------------------------------------- 八处
 
@@ -202,25 +450,65 @@
     stair: { x: 238, y: 39, name: "楼梯" }
   };
 
-  // 她上午真正走过的那三站，顺序就是地图上那条线的顺序：
-  // 先从教室出来，去饮水机接水掏了卡，最后把卡落在楼梯口的窗台上。
-  // 「我猜的」那条（扶手）钉在 stair 上，而 stair 不在答案里——
-  // 把它也钉上，路线就多出一站；去掉它，正好三站。
-  const ROUTE = ["classroom", "cooler", "windowsill"];
+  // 首通（游玩次 0）的路线：教室 → 饮水机 → 楼梯口窗台，和旧版一致。
+  const FIRST_ROUTE = CARD_SPOTS[0].route;
 
-  // 三级提示。不说「去楼梯口」，先说「她上午只出去过一次」，
-  // 让玩家自己把方向想出来；连按三次才给到底。
+  // 三级提示。前两条不说具体位置；第三条按这一轮的落点换。
   const HINTS = [
     "你先别翻了。她上午就出去过一次，就一会儿。",
-    "出去那次是接水。接水得刷卡。",
-    "楼梯口那个窗台。你去看一眼就知道了。"
+    "出去那次是接水。接水得刷卡。"
   ];
 
+  // 线索分四类：亲眼看见 / 我记得 / 我猜的 / 问到的。
+  // 「问到的」是这一版新加的一类，和前三类并列摆在线索本里。
   const KIND = {
     see: { label: "亲眼看见", cls: "k-see" },
     remember: { label: "我记得", cls: "k-rem" },
-    guess: { label: "我猜的", cls: "k-gue" }
+    guess: { label: "我猜的", cls: "k-gue" },
+    ask: { label: "问到的", cls: "k-ask" }
   };
+
+  // 八个观察点的位置索引：自检按 id 走到点位上，不用背坐标。
+  const POINT_INDEX = {};
+  Object.keys(POINTS).forEach(function (scene) {
+    POINTS[scene].forEach(function (p) {
+      POINT_INDEX[p.id] = { id: p.id, scene: scene, x: p.x, y: p.y, r: p.r, label: p.label };
+    });
+  });
+
+  /** 第 n 次游玩的这一轮：落点、路线、真线索、问话答案、印证版。
+   *  纯数据，自检可以直接求解「仅凭真线索能不能唯一确定落点」。 */
+  function roundInfo(n) {
+    const si = spotIndexForRun(n);
+    const s = CARD_SPOTS[si];
+    return {
+      n: n,
+      spotIndex: si,
+      spot: {
+        id: s.id, name: s.name, place: s.place, short: s.short,
+        scene: s.scene, x: s.x, y: s.y, standY: s.standY,
+        dest: s.dest, findHint: s.findHint, findFirst: s.findFirst
+      },
+      route: s.route.slice(),
+      routeNames: s.route.map(function (id) { return SPOTS[id].name; }),
+      dest: s.dest,
+      destName: SPOTS[s.dest].name,
+      truePoints: s.truePoints.slice(),
+      variants: JSON.parse(JSON.stringify(s.variants)),
+      answers: JSON.parse(JSON.stringify(s.answers)),
+      confirms: JSON.parse(JSON.stringify(s.confirms)),
+      hint3: s.hint3,
+      points: JSON.parse(JSON.stringify(POINT_INDEX)),
+      spots: JSON.parse(JSON.stringify(SPOTS))
+    };
+  }
+
+  /** 跨场景步数的收尾评价。只影响措辞，不进任何存档字段。 */
+  function stepVerdict(n) {
+    if (n <= 3) return ["由乃", "你心里有谱啊，都没怎么绕。"];
+    if (n >= 7) return ["由乃", "腿都跑细了吧你。"];
+    return ["由乃", "跑了几趟，也不算白跑。"];
+  }
 
   // ---------------------------------------------------------------- 游戏
 
@@ -240,13 +528,23 @@
     const ex = D.createExplore({
       scenes: SCENES,
       start: "corridor",
-      x: 176,
+      x: 150,
       dir: 1,
       y: 228,
       actors: [GIRL, FRIEND].concat(walkers),
       drawBack: drawBack,
       onScene: onScene
     });
+
+    // 本场第几次游玩 → 这一轮的落点。游玩次落盘（只增不删），
+    // 首通（0）固定是楼梯口窗台，和旧版一致。
+    const runs = Math.max(0, Number(D.store.searchRuns) || 0);
+    D.persist({ searchRuns: runs + 1 });
+    const round = roundInfo(runs);
+    const cardSpot = CARD_SPOTS[round.spotIndex];
+    const hintList = HINTS.concat([round.hint3]);
+    let steps = 0;                  // 跨场景次数（只影响收尾措辞）
+    const confirmed = {};            // "观察点|pin" → 问过关键问题之后的印证版文本
 
     const el = {
       btn: document.getElementById("nbBtn"),
@@ -269,6 +567,24 @@
       mapPickList: document.getElementById("mapPickList"),
       mapPickClose: document.getElementById("mapPickClose")
     };
+    // 问人的面板：不往 daily.html 里加东西，起场时按现有样式（.give-back）建。
+    const askEl = document.createElement("div");
+    askEl.id = "askBox";
+    askEl.className = "give-back";
+    askEl.hidden = true;
+    const askLead = document.createElement("p");
+    askLead.id = "askLead";
+    const askBtns = document.createElement("div");
+    askBtns.id = "askBtns";
+    askBtns.className = "row";
+    const askSaid = document.createElement("p");
+    askSaid.id = "askSaid";
+    askSaid.style.cssText = "margin:8px 0 0;font-size:clamp(13px,1.2vw,16px);line-height:1.6;color:#f6ecdf;text-align:left;";
+    askEl.append(askLead, askBtns, askSaid);
+    const stageEl = document.getElementById("stage");
+    if (stageEl) stageEl.appendChild(askEl);
+    let askOpen = false;
+    let askWho = null;
 
     let state = "intro";        // intro | search | found | done
     let clues = [];
@@ -306,7 +622,7 @@
 
     function renderNotebook() {
       el.list.innerHTML = "";
-      const order = ["see", "remember", "guess"];
+      const order = ["see", "remember", "guess", "ask"];
       let any = false;
       for (const k of order) {
         for (const c of clues) {
@@ -324,13 +640,35 @@
           const em = document.createElement("em");
           em.textContent = c.from;
 
+          // 「问到的」这一类没有单独的 CSS 类，用内联样式给一个能认出来的颜色，
+          // 不动 daily.css。
+          if (k === "ask") {
+            li.style.borderLeftColor = "#8fb98a";
+            li.style.background = "#232b25";
+            tag.style.color = "#a9d6a0";
+          }
+
           li.append(tag, span, em);
           el.list.appendChild(li);
         }
       }
       el.empty.hidden = any;
-      el.hintBtn.disabled = hints >= HINTS.length;
-      el.hintBtn.textContent = hints >= HINTS.length ? "问过了" : "问问由乃";
+      el.hintBtn.disabled = hints >= hintList.length;
+      el.hintBtn.textContent = hints >= hintList.length ? "问过了" : "问问由乃";
+    }
+
+    /** 线索本的图例在 daily.html 里只写了三类，第四类「问到的」起场时补上。 */
+    function ensureLegend() {
+      const legend = document.querySelector("#nb .nb-legend");
+      if (!legend || legend.dataset.ask) return;
+      legend.dataset.ask = "1";
+      legend.appendChild(document.createTextNode("　·　"));
+      const i = document.createElement("i");
+      i.textContent = "问到的";
+      i.style.color = "#a9d6a0";
+      i.style.fontStyle = "normal";
+      legend.appendChild(i);
+      legend.appendChild(document.createTextNode("是她们说的"));
     }
 
     function openNotebook() {
@@ -358,6 +696,116 @@
       }
       updateBadge();
       refreshBadges();
+    }
+
+    // ---------------------------------------------------------------- 问人
+    // 回到教室门口，可以分别问朱里和由乃，每人 3 个问题。答案算第四类线索
+    // 「问到的」进线索本；关键问题问过之后，对应观察点的那条线索会换成
+    // 印证版——「问到的」和「看到的」就对上了。不限次数、不扣分。
+
+    /** 站在她俩谁跟前。范围比观察点小，免得盖住门缝 / 牌子。 */
+    function personNear() {
+      if (ex.scene !== "corridor") return null;
+      const a = ex.actor;
+      for (const who of ["girl", "friend"]) {
+        const p = who === "girl" ? GIRL : FRIEND;
+        if (Math.abs(a.x - p.x) <= 15 && Math.abs(a.y - p.y) <= 18) return who;
+      }
+      return null;
+    }
+
+    function renderAsk() {
+      askBtns.innerHTML = "";
+      askSaid.textContent = "";
+      if (!askWho) {
+        askLead.textContent = "回教室门口了。问谁？";
+        for (const who of ["girl", "friend"]) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.dataset.who = who;
+          b.textContent = ASK_NAME[who];
+          b.addEventListener("click", function () { askWho = who; renderAsk(); });
+          askBtns.appendChild(b);
+        }
+      } else {
+        askLead.textContent = ASK_NAME[askWho] + "——问什么？";
+        ASK[askWho].forEach(function (q, i) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.dataset.q = String(i);
+          b.textContent = q;
+          b.addEventListener("click", function () { askQuestion(askWho, i); });
+          askBtns.appendChild(b);
+        });
+        const back = document.createElement("button");
+        back.type = "button";
+        back.dataset.back = "1";
+        back.textContent = "换个人";
+        back.addEventListener("click", function () { askWho = null; renderAsk(); });
+        askBtns.appendChild(back);
+      }
+      const close = document.createElement("button");
+      close.type = "button";
+      close.dataset.close = "1";
+      close.textContent = "先不问";
+      close.addEventListener("click", closeAsk);
+      askBtns.appendChild(close);
+    }
+
+    function openAsk() {
+      if (askOpen || state !== "search") return;
+      askOpen = true;
+      askWho = null;
+      renderAsk();
+      askEl.hidden = false;
+      requestAnimationFrame(function () { askEl.classList.add("show"); });
+      ex.enable(false);
+      D.hint(null);
+      D.audio.click();
+    }
+
+    function closeAsk() {
+      if (!askOpen) return;
+      askOpen = false;
+      askEl.classList.remove("show");
+      setTimeout(function () { if (!askOpen) askEl.hidden = true; }, 200);
+      if (state === "search") ex.enable(true);
+    }
+
+    /** 把某条线索换成问出来的印证版（问之前 / 问之后看到的都换）。 */
+    function applyConfirm(c) {
+      confirmed[c.point + "|" + c.pin] = c.text;
+      let hit = false;
+      for (const cl of clues) {
+        if (cl.kind === "ask") continue;
+        if (cl.point === c.point && cl.pin === c.pin) {
+          cl.text = c.text;
+          hit = true;
+        }
+      }
+      return hit;
+    }
+
+    function askQuestion(who, qi) {
+      const ans = round.answers[who][qi];
+      if (!ans) return;
+      addClues([{
+        kind: "ask",
+        pin: ans.pin || null,
+        point: null,
+        text: ans.text,
+        from: "走廊 · 问" + ASK_NAME[who]
+      }]);
+      let matched = false;
+      for (const c of round.confirms) {
+        if (c.who !== who || c.q !== qi) continue;
+        if (applyConfirm(c)) matched = true;
+      }
+      askSaid.textContent = ans.text + (matched ? "（和刚才看到的那处对上了。）" : "");
+      // 问完不用关面板：可以接着问，也可以换个人。不限次数。
+      D.audio.blip();
+      renderNotebook();
+      if (matched && !nbOpen) D.react("我", "……对上了。", 1200);
     }
 
     // ---------------------------------------------------------------- 平面图
@@ -571,6 +1019,7 @@
     /** 地点集合对、顺序也要对。先报「多 / 少一站」，再报顺序——
      *  顺序错的时候不点名，只提醒「顺着走过的先后」，让她自己把线顺过来。 */
     function verifyRoute() {
+      const ROUTE = round.route;      // 这一轮的答案路线（每一轮不一样）
       if (pins.length < ROUTE.length) {
         return { ok: false, said: "少了一站。她上午出去，不止这一会儿。" };
       }
@@ -612,15 +1061,17 @@
       closePick();
       D.persist({ searchRouteSolved: true });
       D.audio.right();
-      el.mapRoute.setAttribute("points", ROUTE.map(function (id) {
+      el.mapRoute.setAttribute("points", round.route.map(function (id) {
         return SPOTS[id].x + "," + SPOTS[id].y;
       }).join(" "));
       el.map.classList.remove("drawing");
       el.map.classList.add("solved");
       el.mapCheck.disabled = true;
       el.mapCheck.textContent = "就是这条";
-      el.mapSaid.textContent = "那就是这条。先出教室，去饮水机接水掏了卡，最后落在楼梯口窗台上。";
-      D.objective("帮她把校园卡找回来", "她上午去过教室、饮水机、窗台 —— 卡多半在楼梯口的窗台上");
+      el.mapSaid.textContent = "那就是这条。先出教室，去" + SPOTS[round.route[1]].name +
+        "，最后到" + SPOTS[round.route[2]].name + "。";
+      D.objective("帮她把校园卡找回来",
+        "她上午去过 " + round.routeNames.join("、") + " —— 卡多半在" + cardSpot.place);
     }
 
     // ---------------------------------------------------------------- 消息
@@ -638,9 +1089,9 @@
     }
 
     function askFriend() {
-      if (hints >= HINTS.length) return;
+      if (hints >= hintList.length) return;
       // 第一次问的时候她在走廊里看不见你，所以先问一句「你在哪儿呢」
-      const text = hints === 0 ? "你在哪儿呢。　" + HINTS[0] : HINTS[hints];
+      const text = hints === 0 ? "你在哪儿呢。　" + hintList[0] : hintList[hints];
       hints += 1;
       toast(text);
       D.audio.click();
@@ -648,7 +1099,7 @@
     }
 
     function poke() {
-      if (state !== "search" || nbOpen || mapOpen || D.dialogOpen()) return;
+      if (state !== "search" || nbOpen || mapOpen || askOpen || D.dialogOpen()) return;
       if (ex.t - lastPoke < 1.0) return;
       lastPoke = ex.t;
       const m = MUMBLE[mumbleIdx++ % MUMBLE.length];
@@ -701,11 +1152,25 @@
 
     // ---------------------------------------------------------------- 看东西
 
+    /** 这一处这一轮该产出的线索：真线索点用变体，其余点用原来那组观察。
+     *  问过关键问题的，换成印证版文本。 */
+    function cluesForPoint(p) {
+      const base = (round.variants[p.id] || p.clues);
+      return base.map(function (c) {
+        const conf = confirmed[p.id + "|" + c.pin];
+        const out = {};
+        for (const k in c) out[k] = c[k];
+        out.point = p.id;
+        if (conf) out.text = conf;
+        return out;
+      });
+    }
+
     async function look(p) {
       ex.enable(false);
       D.hint(null);
       await D.lines(p.lines);
-      addClues(p.clues);
+      addClues(cluesForPoint(p));
       D.audio.click();
       // 玩家刚看完一处，马上落一句自己的反应，别让「记线索」像交作业
       D.react("我", "记一下。", 1200);
@@ -721,7 +1186,7 @@
       D.reactHint(false);
       D.clearReact();
       await D.lines([
-        ["旁白", "窗台上落着一层薄灰。靠外那一角，压着一张卡。"],
+        ["旁白", cardSpot.findFirst],
         ["我", routeSolved ? "……果然在这儿。" : "……还真是这儿。"],
         ["旁白", "卡的边角被晒得有点卷。上面是她的照片，头发比现在短。"]
       ]);
@@ -730,7 +1195,7 @@
       await chooseReturn();
 
       await D.fadeTo(1, 300);
-      ex.jump("corridor", 176, 1);
+      ex.jump("corridor", 150, 1);
       host.setChapter("走廊");
       await D.fadeTo(0, 300);
 
@@ -752,31 +1217,38 @@
         clues: clues.length,
         total: 9,
         hints: hints,
+        steps: steps,
+        spot: cardSpot.id,
         early: clues.length <= 2
       });
     }
 
     /** 收尾按「看了多少」分三种说法。三种都只说她怎么反应，不说她高不高兴。
-     *  「怎么还」那一步只给最前面添一句，不改后面任何一句、不改结局。 */
+     *  「怎么还」那一步只给最前面添一句，不改后面任何一句、不改结局。
+     *  跨场景步数只往中间加一句评价（少步数 / 多步数口径），也不进存档。 */
     function closing() {
       const lead = returnChoice === 1 ? [["我", "放你桌上了。"]]
                  : returnChoice === 2 ? [["我", "朱里——找到了。"]]
                  : [];
+      const txt = SPOT_TEXT[cardSpot.id] || {
+        echo: cardSpot.short + "？", low: "……在" + cardSpot.place + "。",
+        detail: "就在那儿。", mid: cardSpot.place + "。"
+      };
       let base;
       if (clues.length <= 2) {
         base = [
           ["由乃", "这么快？"],
-          ["我", "……在楼梯口，窗台上。"],
-          ["朱里", "窗台？"],
-          ["我", "嗯。压在最外头那一角。"],
+          ["我", txt.low],
+          ["朱里", txt.echo],
+          ["我", "嗯。" + txt.detail],
           ["由乃", "你怎么直接就找到了。"],
           ["我", "……运气。"],
           ["朱里", "……谢谢。"]
         ];
-      } else if (clues.length <= 5) {
+      } else if (clues.length <= 6) {
         base = [
           ["由乃", "找到了？"],
-          ["我", "楼梯口的窗台上。"],
+          ["我", txt.mid],
           ["朱里", "我上午去接水……"],
           ["朱里", "……你怎么知道。"],
           ["我", "门没关严，笔帽没盖。你走得太急了。"],
@@ -794,13 +1266,17 @@
           ["旁白", "我没问她为什么一直不挂在脖子上。"]
         ];
       }
-      return D.lines(lead.concat(base));
+      const body = base.slice();
+      body.splice(Math.max(1, body.length - 2), 0, stepVerdict(steps));
+      return D.lines(lead.concat(body));
     }
 
     // ---------------------------------------------------------------- 换场景
 
     function onScene(name, first) {
-      if (!first || state !== "search") return;
+      if (state !== "search") return;
+      steps += 1;                         // 跨场景次数：只用来决定收尾措辞
+      if (!first) return;
       if (name === "stair") {
         D.lines([["旁白", "楼梯口的窗户开着，风一阵一阵灌进来。"]]);
       } else if (name === "railing") {
@@ -818,6 +1294,7 @@
       el.btn.hidden = false;
       updateBadge();
       renderNotebook();
+      ensureLegend();
 
       el.btn.onclick = function () { nbOpen ? closeNotebook() : openNotebook(); };
       el.close.onclick = closeNotebook;
@@ -865,7 +1342,7 @@
         if (here) crowds[k].update(dt);
       }
 
-      if (state !== "search" || nbOpen || mapOpen || D.dialogOpen()) { near = null; return; }
+      if (state !== "search" || nbOpen || mapOpen || askOpen || D.dialogOpen()) { near = null; return; }
 
       // 站太久就自己嘀咕一句。不是提示，不给方向。
       if (D.axisX() !== 0 || D.axisY() !== 0) { idleT = 0; idleReacted = false; }
@@ -877,30 +1354,38 @@
         }
       }
 
-      // 卡自己不是「互动点」——它一直躺在那儿，走过去按 E 就捡。
-      // 没听过任何线索也捡得起来，这是设计稿明确要求的。
-      if (ex.scene === CARD.scene && ex.near(CARD.x, CARD.standY, 46, 20)) {
-        near = null;
-        D.hint("E · 看看窗台", 0);
-        return;
-      }
-
+      // 观察点优先：门缝 / 牌子这些互动点离她俩不远，站在点位上按 E 时
+      // 不该被「问人」抢掉。问人只在站在她俩跟前时才亮提示。
       near = null;
       for (const p of POINTS[ex.scene] || []) {
         if (p.used) continue;
         if (ex.near(p.x, p.y, p.r, 20)) { near = p; break; }
       }
-      if (near) D.hint("E · " + near.label, 0);
-      else D.hint(null);
+      if (near) { D.hint("E · " + near.label, 0); return; }
+
+      const who = personNear();
+      if (who) { D.hint("E · 问问" + ASK_NAME[who], 0); return; }
+
+      // 卡自己不是「互动点」——它一直躺在那儿，走过去按 E 就捡。
+      // 没听过任何线索也捡得起来，这是设计稿明确要求的。
+      if (ex.scene === cardSpot.scene && ex.near(cardSpot.x, cardSpot.standY, 46, 20)) {
+        D.hint(cardSpot.findHint, 0);
+        return;
+      }
+      D.hint(null);
     }
 
     function press(key) {
+      if (askOpen) {
+        if (key === "Escape") closeAsk();
+        return;
+      }
       if (mapOpen) {
         if (key === "Tab" || key === "Escape") closeMap();
         return;
       }
       if (key === "Tab") { nbOpen ? closeNotebook() : openNotebook(); return; }
-      if (key === "Escape") { closeNotebook(); return; }
+      if (key === "Escape") { if (askOpen) closeAsk(); else closeNotebook(); return; }
       if (nbOpen) return;
       if (state !== "search") return;
       if (D.dialogOpen()) return;
@@ -908,10 +1393,16 @@
       const k = key.toLowerCase();
       if (k !== "e" && key !== "Enter") return;
 
-      if (ex.scene === CARD.scene && ex.near(CARD.x, CARD.standY, 46, 20)) { find(); return; }
       if (near && !near.used) {
         near.used = true;
         look(near);
+        return;
+      }
+      const who = personNear();
+      if (who) { openAsk(); return; }
+      if (ex.scene === cardSpot.scene && ex.near(cardSpot.x, cardSpot.standY, 46, 20)) {
+        find();
+        return;
       }
     }
 
@@ -939,23 +1430,42 @@
       ctx.restore();
     }
 
-    /** 窗台上那张卡。走近了才有一点反光，不走近就是一块很不起眼的白。
+    /** 这一轮落点上那张卡。走近了才有一点反光，不走近就是一块很不起眼的白。
      *  找到之后先别急着擦掉——旁白还在说「压着一张卡」，
      *  画面上却空了，等于把话说了一半。等离开这个场景再收。 */
     function drawBack(ctx, scene, t) {
-      if (scene !== CARD.scene) return;
+      if (scene !== cardSpot.scene) return;
       if (state === "done") return;
 
-      const x = CARD.x, y = CARD.y;
+      const x = cardSpot.x, y = cardSpot.y;
       ctx.save();
+
+      // 「开水房刷卡机旁边」得让玩家看见刷卡机，不然那条线索落不了地。
+      // 只用 Canvas 画几个方块，不新增图片素材。
+      if (cardSpot.id === "waterReader") {
+        ctx.globalAlpha = 0.92;
+        ctx.fillStyle = "#4a4d55";
+        ctx.fillRect(x - 22, y - 44, 44, 30);
+        ctx.fillStyle = "#5c606a";
+        ctx.fillRect(x - 22, y - 44, 44, 4);
+        ctx.fillStyle = "#23262c";
+        ctx.fillRect(x - 14, y - 34, 20, 10);       // 刷卡区
+        ctx.fillStyle = "#8fd6a0";
+        ctx.fillRect(x + 10, y - 32, 4, 4);         // 绿灯
+        ctx.fillStyle = "rgba(255,226,180,.72)";
+        ctx.font = '7px "Microsoft YaHei",sans-serif';
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("开水房", x, y - 50);
+      }
 
       ctx.globalAlpha = 0.3;
       ctx.fillStyle = "#2b2b33";
-      ctx.fillRect(x - 5, y - 1, 11, 3);       // 卡压在窗台上的影子
+      ctx.fillRect(x - 5, y - 1, 11, 3);       // 卡压着的影子
 
       ctx.globalAlpha = 1;
       ctx.fillStyle = "#2f3238";
-      ctx.fillRect(x - 5, y - 12, 10, 12);     // 一圈深色边，不然白卡会溶进白石台
+      ctx.fillRect(x - 5, y - 12, 10, 12);     // 一圈深色边，不然白卡会溶进背景
       ctx.fillStyle = "#f4f1e6";
       ctx.fillRect(x - 4, y - 11, 8, 10);
       ctx.fillStyle = "#5f86a8";
@@ -990,6 +1500,10 @@
         if (choiceKey) { window.removeEventListener("keydown", choiceKey); choiceKey = null; }
         const box = document.getElementById("giveBack");
         if (box) { box.classList.remove("show"); box.hidden = true; }
+        if (askOpen) closeAsk();
+        askEl.classList.remove("show");
+        askEl.hidden = true;
+        if (askEl.parentNode) askEl.parentNode.removeChild(askEl);
         mapOpen = false;
         closePick();
         el.map.classList.remove("show");
@@ -1006,15 +1520,33 @@
       get returnChoice() { return returnChoice; },
       get girlVisible() { return !GIRL.hidden; },
       get mapOpen() { return mapOpen; },
+      get askOpen() { return askOpen; },
+      get steps() { return steps; },
+      get runs() { return runs; },
+      get round() { return round; },
+      get confirmed() { return Object.assign({}, confirmed); },
       get pins() { return pins.slice(); },
       get evidence() { return Object.assign({}, pinClue); },
       get pickFor() { return pickFor; },
       get routeSolved() { return routeSolved; },
       get routeTries() { return routeTries; },
+      get nearPoint() { return near ? near.id : null; },
+      get cardSpot() {
+        return {
+          id: cardSpot.id, name: cardSpot.name, place: cardSpot.place,
+          scene: cardSpot.scene, x: cardSpot.x, y: cardSpot.y,
+          standY: cardSpot.standY, dest: cardSpot.dest, findHint: cardSpot.findHint
+        };
+      },
       spots: SPOTS,
-      route: ROUTE,
-      cardX: CARD.x
+      route: round.route.slice(),
+      cardX: cardSpot.x
     };
   };
+
+  // 自检 / 调试用：每一轮的数据是纯函数，不用真玩也能求解验证。
+  D.games.search.roundInfo = roundInfo;
+  D.games.search.stepVerdict = stepVerdict;
+  D.games.search.CARD_SPOTS = CARD_SPOTS;
 
 })(window);
