@@ -49,6 +49,10 @@
     let timer = 0;
     let musicOn = true;
 
+    // 末段加速：从这里开始每一拍变短。拍号本身不变，所以鼓组的 bar 相位不变。
+    let tempoBeat = Infinity;
+    let tempoSpb = SPB;
+
     function ensure() {
       if (ctx) return ctx;
       const AC = global.AudioContext || global.webkitAudioContext;
@@ -140,10 +144,41 @@
     function seek(t) {
       ensure();
       songStart = ctx.currentTime - t - offsetSec;
-      schedSlot = Math.max(0, Math.ceil(t / (SPB / 2)));
+      schedSlot = Math.max(0, Math.ceil(beatAt(t) * 2));
       running = true;
       pausedAt = t;
       if (!timer) timer = setInterval(schedule, TICK_MS);
+    }
+
+    // ------------------------------------------------------------ 速度
+
+    /**
+     * 谱面末段要从 96 换到 108。拍点还是那些拍点，改的是「第几拍在音频时钟上的
+     * 第几秒」。排程线程所有事件时间都走 beatTime()，所以鼓、贝斯、人声一起变速。
+     */
+    function setTempoChange(beat, bpm) {
+      const b = Number(beat);
+      const spb2 = 60 / Number(bpm);
+      if (!isFinite(b) || b <= 0 || !isFinite(spb2) || spb2 <= 0 || Math.abs(spb2 - SPB) < 1e-9) {
+        tempoBeat = Infinity;
+        tempoSpb = SPB;
+        return;
+      }
+      tempoBeat = b;
+      tempoSpb = spb2;
+    }
+
+    /** 第几拍 → 距第 0 秒多少秒。 */
+    function beatTime(beat) {
+      if (beat <= tempoBeat) return beat * SPB;
+      return tempoBeat * SPB + (beat - tempoBeat) * tempoSpb;
+    }
+
+    /** 距第 0 秒多少秒 → 第几拍。seek 用它把播放位置对回拍点。 */
+    function beatAt(t) {
+      const at = tempoBeat * SPB;
+      if (t <= at) return t / SPB;
+      return tempoBeat + (t - at) / tempoSpb;
     }
 
     function setOffsetMs(ms) {
@@ -156,10 +191,9 @@
     function schedule() {
       if (!ctx || !running) return;
       const horizon = ctx.currentTime + LOOKAHEAD;
-      const slotDur = SPB / 2;
       let guard = 0;
-      while (songStart + schedSlot * slotDur < horizon && guard++ < 64) {
-        const at = songStart + schedSlot * slotDur;
+      while (songStart + beatTime(schedSlot * 0.5) < horizon && guard++ < 64) {
+        const at = songStart + beatTime(schedSlot * 0.5);
         if (at >= ctx.currentTime - 0.02 && musicOn) grooveAt(schedSlot, at);
         schedSlot++;
       }
@@ -181,8 +215,10 @@
       else if (inBar === 2) bass(ch.root - 12, beat, 0.62);
       else if (inBar === 3.5) bass(ch.fifth, beat, 0.36);
 
-      // 每两小节起一次和声垫，铺满整两小节
-      if (bar % 2 === 0 && inBar === 0) pad(ch.chord, beat, SPB * BAR * 2);
+      // 每两小节起一次和声垫，铺满整两小节（末段变速后长度跟着拍点走）
+      if (bar % 2 === 0 && inBar === 0) {
+        pad(ch.chord, beat, Math.max(0.2, beatTime((slot + 16) * 0.5) - beatTime(slot * 0.5)));
+      }
     }
 
     function kick(at) {
@@ -261,7 +297,9 @@
       const v = VOICE[who] || VOICE.me;
       const at = Math.max(ctx.currentTime, when || ctx.currentTime);
       const o = opt || {};
-      const step = PENTA[Math.abs(seed | 0) % 5] + 12 * (Math.floor(Math.abs(seed | 0) / 5) % 2);
+      // 音高：hi 往上两个五声音阶，lo 往下两个。玩家按住哪个键、念的就是哪个音。
+      const pShift = o.p === "hi" ? 2 : o.p === "lo" ? -2 : 0;
+      const step = PENTA[Math.abs(seed | 0) % 5] + 12 * (Math.floor(Math.abs(seed | 0) / 5) % 2) + pShift;
       const f = hz(v.base + step);
       const len = o.len || v.len;
       const gain = o.gain == null ? 0.9 : o.gain;
@@ -310,7 +348,8 @@
         const bend = Math.round(-1.6 * k);
         blip(who, seed0 + i * 3 + bend, base + k * span, {
           gain: 0.72 + 0.28 * (1 - k),
-          len: o.len
+          len: o.len,
+          p: o.p
         });
       }
     }
@@ -423,6 +462,7 @@
       unlock, ensure,
       now, songTime, startSong, stopSong, seek,
       setOffsetMs, offsetMs,
+      setTempoChange, beatTime, beatAt,
       blip, say, tapPaper, chime, thud, cover, click, metronome,
       setMusic,
       get ready() { return ready; },

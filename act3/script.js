@@ -3,11 +3,15 @@
  * 这里只写「谁、说什么、占几拍」，不写秒。时间由 chart.js 按 96 BPM 换算。
  * 改稿子不用碰任何判定或渲染代码，这是把内容单独抽出来的全部理由。
  *
- * 四种节奏块：
- *   T(文本, 拍)  Tap    —— 一句话的起头、或者重音，按一下
- *   H(文本, 拍)  Hold   —— 一句长话，按住不放，拍数就是按住多久
- *   R(拍)        Rest   —— 逗号、句号、换气。**不按键**，轨道上只有一个刻度
- *   Y(文本, 拍)  Relay  —— 接力。她说完了，这一下是你的，接住才算过
+ * 五种节奏块：
+ *   T(文本, 拍[, 音高])  Tap    —— 一句话的起头、或者重音，按一下
+ *   H(文本, 拍[, 音高])  Hold   —— 一句长话，按住不放，拍数就是按住多久
+ *   R(拍)                Rest   —— 逗号、句号、换气。**不按键**，轨道上只有一个刻度
+ *   Y(文本, 拍[, 音高])  Relay  —— 接力。她说完了，这一下是你的，接住才算过
+ *   B(文本, 拍[, 音高])  Both   —— 双人长按：她先按住，你在 300ms 内跟上一起松手
+ *
+ * 音高不写（第三个参数省略）就由 chart.js 按词块在句中的位置推导：
+ * 句首/上扬是 hi，收尾/落点是 lo。要覆盖就写 "hi" / "lo"。
  *
  * 拍数怎么给：一个三到五字的词块念出来大约 0.9 秒，也就是 1.5 拍；
  * 两三个字的短块给 1 拍，单字重音给 0.75 拍；换气给 1–2 拍 Rest。
@@ -20,10 +24,12 @@
 (function (global) {
   "use strict";
 
-  const T = (text, beats) => ({ k: "tap", text, beats: beats == null ? 1 : beats });
-  const H = (text, beats) => ({ k: "hold", text, beats: beats == null ? 2 : beats });
+  const T = (text, beats, p) => ({ k: "tap", text, beats: beats == null ? 1 : beats, p });
+  const H = (text, beats, p) => ({ k: "hold", text, beats: beats == null ? 2 : beats, p });
   const R = (beats) => ({ k: "rest", beats: beats == null ? 1 : beats });
-  const Y = (text, beats) => ({ k: "relay", text, beats: beats == null ? 1 : beats });
+  const Y = (text, beats, p) => ({ k: "relay", text, beats: beats == null ? 1 : beats, p });
+  /** 双人长按块。收尾那句两个人一起按住、一起松手——同步了才算「收尾同步」。 */
+  const B = (text, beats, p) => ({ k: "both", text, beats: beats == null ? 2.5 : beats, p });
 
   const her = (chunks) => ({ who: "her", chunks });
   const me = (chunks) => ({ who: "me", chunks });
@@ -353,11 +359,23 @@
       T("朱里。", 1.5),
       R(1)
     ]),
-    me([H("下次见。", 2.5)]),
-    same(her([H("下次见。", 2.5)]))
+    me([B("下次见。", 2.5)]),
+    same(her([B("下次见。", 2.5)]))
+  ];
+
+  // 五段结构（结算按段出数、末段加速、突然段都在这里定边界）。
+  // 行号区间是 [from, to)：试音 1 行 / 开场 6 行 / 来电 18 行 / 点歌 32 行 / 收尾 6 行。
+  // chart.js 会校验这里必须正好盖满全部 63 行，改稿子行数时这里也要跟着改。
+  const SEGMENTS = [
+    { name: "试音", from: 0, to: 1 },
+    { name: "开场", from: 1, to: 7 },
+    { name: "来电", from: 7, to: 25 },
+    { name: "点歌", from: 25, to: 57 },
+    { name: "收尾", from: 57, to: 63 }
   ];
 
   global.ACT3 = global.ACT3 || {};
   global.ACT3.Script = SCRIPT;
-  global.ACT3.scriptHelpers = { T, H, R, Y, same };
+  global.ACT3.Segments = SEGMENTS;
+  global.ACT3.scriptHelpers = { T, H, R, Y, B, same };
 })(window);

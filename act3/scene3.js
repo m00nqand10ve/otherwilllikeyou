@@ -20,8 +20,9 @@
   // 两人沿用第二幕的左／右座位，轨道放在右侧空区。
   const HIT_Y = 228;          // 判定线
   const LANE_TOP = 34;        // 音符从这里生出来
-  const APPROACH = 1.55;      // 音符从生出来到判定的时间（秒）
-  const SPEED = (HIT_Y - LANE_TOP) / APPROACH;
+  const FINAL_APPROACH = 1.25; // 末段（收尾）的下落提前量，跟 chart 一致
+  // 玩家轨在判定线上分上下两格：上格 = 高音（J），下格 = 低音（F）。
+  const HIT_ROW = { hi: -4, lo: 4, both: 0, grace: 0 };
 
   const LANE = {
     her: { x: 358, w: 38, main: "#f2a8b8", dim: "#8d5a66", name: "朱里" },
@@ -57,9 +58,16 @@
   // ---------------------------------------------------------------- 声音与谱面
 
   const audio = global.ACT3.createAudio();
-  const chart = global.ACT3.buildChart(global.ACT3.Script);
 
   const SAVE_KEY = "our-story-act3-broadcast-v1";
+  const DIFF_KEY = "act3-difficulty-v1";
+  const RESULT_KEY = "act3-result-v1";
+  const PAPERS_KEY = "our-story-bridge-papers-v1";
+
+  function readJSON(key) {
+    try { return JSON.parse(localStorage.getItem(key) || "null") || null; }
+    catch (e) { return null; }
+  }
   function loadSave() {
     try { return JSON.parse(localStorage.getItem(SAVE_KEY) || "null") || {}; }
     catch (e) { return {}; }
@@ -72,17 +80,62 @@
   }
   const SAVE = loadSave();
 
+  /** 难度档：新键只有「演播」「电台」；旧档、乱写、读不到一律按「演播」。 */
+  function loadDifficulty() {
+    try {
+      const v = localStorage.getItem(DIFF_KEY);
+      return v === "电台" ? "电台" : "演播";
+    } catch (e) { return "演播"; }
+  }
+  function saveDifficulty(name) {
+    try { localStorage.setItem(DIFF_KEY, name === "电台" ? "电台" : "演播"); }
+    catch (e) { /* 无痕模式写不进去，不影响玩 */ }
+  }
+
+  /** 过场接住几张稿纸：0–3，缺省按 3（旧体验 = 一张没掉）。只改念稿前的小动作字幕。 */
+  function papersCaught() {
+    try {
+      const v = parseInt(localStorage.getItem(PAPERS_KEY), 10);
+      return (v >= 0 && v <= 3) ? v : 3;
+    } catch (e) { return 3; }
+  }
+
   const BACK = (() => {
     try { return new URLSearchParams(location.search).get("back") || "../school-preview.html"; }
     catch (e) { return "../school-preview.html"; }
   })();
   const FRESH = /(\?|&)fresh=1/.test(location.search);
   const FROM_BRIDGE = new URLSearchParams(location.search).get("from") === "bridge";
+  // 自检用：?seed=N 把谱面种子钉死，突发段每次落在同四小节
+  const FIXED_SEED = (() => {
+    try {
+      const v = new URLSearchParams(location.search).get("seed");
+      return v == null || v === "" ? null : (parseInt(v, 10) >>> 0);
+    } catch (e) { return null; }
+  })();
+
+  const DIFFS = global.ACT3.DIFFS;
+  const NOISE = global.ACT3.NOISE;
+  const DEFAULT_DIFF = global.ACT3.DEFAULT_DIFF || "演播";
+
+  let difficulty = "演播";
+  let chart = null;
+  let rhythm = null;
+  let noteById = new Map();
+  let runNo = 0;
+  const runSalt = (Date.now() & 0xffff) >>> 0;   // 只有老玩家的重录才用得到，首通必触发
+
+  function nextSeed() {
+    if (FIXED_SEED != null) return FIXED_SEED;
+    runNo++;
+    const base = ((SAVE.best || 0) + (SAVE.offset || 0) + runSalt) >>> 0;
+    return global.ACT3.mixSeed(runNo * 2654435761, base);
+  }
 
   // ---------------------------------------------------------------- 状态
 
   const sc = {
-    state: "intro",     // intro | check | ready | play | finale | done | leave
+    state: "intro",     // intro | check | diff | ready | play | finale | done | leave
     t: 0,
     cam: { x: 256, y: 150, z: 1.55, tx: 256, ty: 150, tz: 1 },
     walk: 0,            // 她走进来的进度 0..1
@@ -93,53 +146,95 @@
     readyT: 0,
     finaleT: 0,
     byeShown: false,
-    finished: false
+    finished: false,
+    everCleared: !!SAVE.cleared,
+    paperVariant: false,
+    noisyShown: false,
+    burstToast: false
   };
 
   const vu = { her: 0, me: 0 };
   const fx = [];
 
-  const rhythm = global.ACT3.createRhythm(chart, audio, {
-    onJudge(tier, note, delta) {
-      vu.me = Math.min(1, vu.me + 0.55);
-      fx.push({
-        kind: "ring", lane: "me", t0: audio.songTime(),
-        tier, color: LANE.me.main
-      });
-      if (tier === "miss") flashLane("me");
-    },
-    onHerNote(n) {
-      vu.her = Math.min(1, vu.her + 0.5);
-      fx.push({ kind: "ring", lane: "her", t0: audio.songTime(), tier: "auto", color: LANE.her.main });
-    },
-    onCover(n) {
-      vu.her = 1;
-      // 这里**不画圈**。空心的圆环读起来像准星，不像「她开口了」；
-      // 换成粉轨底下一道更宽更亮的横扫，和补位那一刻同一种语言。
-      fx.push({ kind: "sweep", t0: audio.songTime(), color: "#ffd9e2", big: true });
-    },
-    onRescue(n, cov) {
-      // 她接住了。**画面不写字**：她的音色换了人、粉轨上多一个「托」的音符、
-      // 字幕那半句变成她的颜色——三样加起来比一行「她救了你」有说服力，
-      // 也不会和判定字挤在同一条线上。
-      fx.push({ kind: "sweep", t0: audio.songTime(), color: LANE.her.main });
-    },
-    onCue() {
-      fx.push({ kind: "cue", t0: audio.songTime(), color: "#f4ecdd" });
-    },
-    onHoldBreak() { flashLane("me"); },
-    onFinish(st) {
-      sc.finished = true;
-      sc.finishStats = st;
-    }
-  });
+  /** 判定回调。每局重建 rhythm 时重新挂一份。 */
+  function makeHooks() {
+    return {
+      onJudge(tier, note, delta) {
+        vu.me = Math.min(1, vu.me + 0.55);
+        fx.push({
+          kind: "ring", lane: "me", t0: audio.songTime(),
+          tier, color: tier === "wrong" ? "#ff8f86" : LANE.me.main
+        });
+        if (tier === "miss" || tier === "wrong") flashLane("me");
+      },
+      onHerNote(n) {
+        vu.her = Math.min(1, vu.her + 0.5);
+        fx.push({ kind: "ring", lane: "her", t0: audio.songTime(), tier: "auto", color: LANE.her.main });
+      },
+      onCover(n) {
+        vu.her = 1;
+        // 这里**不画圈**。空心的圆环读起来像准星，不像「她开口了」；
+        // 换成粉轨底下一道更宽更亮的横扫，和补位那一刻同一种语言。
+        fx.push({ kind: "sweep", t0: audio.songTime(), color: "#ffd9e2", big: true });
+      },
+      onRescue(n, cov) {
+        // 她接住了。**画面不写字**：她的音色换了人、粉轨上多一个「托」的音符、
+        // 字幕那半句变成她的颜色——三样加起来比一行「她救了你」有说服力，
+        // 也不会和判定字挤在同一条线上。
+        fx.push({ kind: "sweep", t0: audio.songTime(), color: LANE.her.main });
+      },
+      onCue() {
+        fx.push({ kind: "cue", t0: audio.songTime(), color: "#f4ecdd" });
+      },
+      onGrace(g) {
+        fx.push({ kind: "grace", t0: audio.songTime(), color: "#ffe9a8" });
+      },
+      onBothPress(n) {
+        fx.push({ kind: "both", t0: audio.songTime(), color: LANE.me.main });
+      },
+      onSync(ev) {
+        fx.push({ kind: "sync", t0: audio.songTime(), color: "#ffe9a8" });
+      },
+      onHoldBreak() { flashLane("me"); },
+      onFinish(st) {
+        sc.finished = true;
+        sc.finishStats = st;
+      }
+    };
+  }
 
-  // 字幕查判定状态要查 rhythm 手里那份**副本**：
-  // chart.notes 是谱面原件，judged / result 是写在副本上的，
-  // 第一版查错了对象，结果漏掉的半句永远不会变成她的颜色。
-  const noteById = new Map();
-  for (const n of rhythm.mine) noteById.set(n.id, n);
-  for (const n of rhythm.hers) noteById.set(n.id, n);
+  /**
+   * 造一局：谱面按种子重建（突发段落在哪四小节由种子决定），判定按当前难度档。
+   * 首通（没 cleared）必触发突发段，之后 50%。所有随机都在 chart.js 的纯函数里。
+   */
+  function createRun() {
+    chart = global.ACT3.buildChart(global.ACT3.Script, {
+      seed: nextSeed(),
+      firstRun: !SAVE.cleared
+    });
+    if (chart.segmentError) {
+      try { console.warn("act3 谱面五段表有问题：" + chart.segmentError); } catch (e) { }
+    }
+    rhythm = global.ACT3.createRhythm(chart, audio, Object.assign({ difficulty }, makeHooks()));
+    // 字幕查判定状态要查 rhythm 手里那份**副本**：
+    // chart.notes 是谱面原件，judged / result 是写在副本上的，
+    // 第一版查错了对象，结果漏掉的半句永远不会变成她的颜色。
+    noteById = new Map();
+    for (const n of rhythm.mine) noteById.set(n.id, n);
+    for (const n of rhythm.hers) noteById.set(n.id, n);
+    audio.setTempoChange(chart.accelBeat, chart.accelBpm);
+    sc.burstToast = false;
+    return chart;
+  }
+
+  /** 当前档位、以及每个音符的下落提前量：末段（收尾）固定 1.25s，其余按档位。 */
+  const BASE_APPROACH = () => (DIFFS[difficulty] || DIFFS[DEFAULT_DIFF]).approach;
+  function approachOf(n) {
+    return (n && n.seg === chart.segments.length - 1) ? FINAL_APPROACH : BASE_APPROACH();
+  }
+  function speedOf(n) {
+    return (HIT_Y - LANE_TOP) / approachOf(n);
+  }
 
   // ---------------------------------------------------------------- 提示条
 
@@ -283,8 +378,10 @@
 
   // ---------------------------------------------------------------- 轨道
 
-  function laneY(time) {
-    return HIT_Y - (time - audio.songTime()) * SPEED;
+  /** 一个音符现在该画在多高。末段的下落更快（1.25s），所以每颗音符各算各的。 */
+  function laneY(n, atTime) {
+    const t = atTime == null ? n.time : atTime;
+    return HIT_Y - (t - audio.songTime()) * speedOf(n);
   }
 
   function drawLanes() {
@@ -330,49 +427,104 @@
     ctx.fillRect(LANE.her.x, HIT_Y + 1, lw, 1);
     ctx.fillRect(LANE.her.x, HIT_Y - 2, lw, 1);
 
-    // 接收器
-    for (const k of ["her", "me"]) {
-      const L = LANE[k];
-      const y = HIT_Y - 5;
+    // 接收器：她一条；你两条——上格高音（J）、下格低音（F）
+    {
+      const L = LANE.her;
       ctx.fillStyle = "rgba(10,14,16,.55)";
-      ctx.fillRect(L.x + 2, y, L.w - 4, 10);
-      ctx.strokeStyle = flashT > 0 && k === "me"
-        ? "rgba(255,120,110,.95)"
-        : hexA(L.main, 0.55);
+      ctx.fillRect(L.x + 2, HIT_Y - 5, L.w - 4, 10);
+      ctx.strokeStyle = hexA(L.main, 0.55);
       ctx.lineWidth = 1;
-      ctx.strokeRect(L.x + 2.5, y + 0.5, L.w - 5, 9);
+      ctx.strokeRect(L.x + 2.5, HIT_Y - 4.5, L.w - 5, 9);
     }
+    for (const [k, off, label] of [["hi", HIT_ROW.hi, "J"], ["me-lo", HIT_ROW.lo, "F"]]) {
+      const L = LANE.me;
+      const y = HIT_Y + off - 2;
+      ctx.fillStyle = "rgba(10,14,16,.55)";
+      ctx.fillRect(L.x + 2, y - 2, L.w - 4, 5);
+      ctx.strokeStyle = flashT > 0 && k === "hi"
+        ? "rgba(255,120,110,.95)"
+        : hexA(L.main, 0.5);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(L.x + 2.5, y - 1.5, L.w - 5, 4);
+      // 键位小字放在两条轨道之间的缝里，不挡音符本体
+      ctx.font = 'bold 7px "Microsoft YaHei",sans-serif';
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "rgba(0,0,0,.65)";
+      ctx.fillText(label, LANE.me.x - 2, HIT_Y + off + 0.5);
+      ctx.fillStyle = hexA(L.main, 0.62);
+      ctx.fillText(label, LANE.me.x - 3, HIT_Y + off);
+    }
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
 
     // 中间的接缝：两条轨道是一条话的两半，缝上画一列小点
     ctx.fillStyle = "rgba(255,255,255,.10)";
     const seam = Math.floor((LANE.her.x + LANE.her.w + LANE.me.x) / 2);
     for (let y = LANE_TOP + 6; y < HIT_Y; y += 8) ctx.fillRect(seam, y, 2, 2);
+
+    drawNoiseBar();
+  }
+
+  /** 判定线右端的细噪音条。没有新图片，全是矩形。 */
+  function drawNoiseBar() {
+    if (!rhythm) return;
+    const n = rhythm.state.noise;
+    const x = LANE.me.x + LANE.me.w + 5;
+    const w = 4;
+    const h = 42;
+    const y0 = HIT_Y - h - 3;
+    // 深色底板：这条是 HUD，不能和后面亮着的大门混在一起
+    ctx.fillStyle = "rgba(8,11,12,.66)";
+    ctx.fillRect(x - 2, y0 - 2, w + 4, h + 4);
+    ctx.strokeStyle = "rgba(242,233,218,.14)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x - 1.5, y0 - 1.5, w + 3, h + 3);
+    ctx.fillStyle = "rgba(255,255,255,.06)";
+    ctx.fillRect(x, y0, w, h);
+    const k = Math.max(0, Math.min(1, n / NOISE.max));
+    const col = n >= NOISE.rescue ? "#ff6b5f" : n >= NOISE.grey ? "#e0b45a" : "#7fb4c4";
+    ctx.fillStyle = hexA(col, 0.95);
+    ctx.fillRect(x, y0 + h * (1 - k), w, h * k);
+    for (const th of [NOISE.grey, NOISE.rescue]) {
+      const yy = Math.round(y0 + h * (1 - th / NOISE.max));
+      ctx.fillStyle = "rgba(242,233,218,.40)";
+      ctx.fillRect(x - 2, yy, w + 4, 1);
+    }
   }
 
   function drawNotes() {
     const t = audio.songTime();
     const live = rhythm.live();
+    // 噪音大了，她那边的下一行音符变灰——演出层的事，判定照常自动
+    const loud = live.noise >= NOISE.grey;
 
     // 先画她的（在下层），再画你的（在上层）——你的音符永远不被压住
     for (const n of live.hers) {
       if (n.judged) continue;
-      const y = laneY(n.time);
+      const y = laneY(n);
       if (y < LANE_TOP - 20 || y > HIT_Y + 30) continue;
-      drawNote(n, y, "her");
+      drawNote(n, y, "her", loud);
+    }
+    for (const g of live.graces || []) {
+      if (g.judged) continue;
+      const y = laneY(g);
+      if (y < LANE_TOP - 20 || y > HIT_Y + 30) continue;
+      drawGraceNote(g, y);
     }
     for (const n of live.mine) {
       if (n.judged) continue;
-      const y = laneY(n.time);
+      const y = laneY(n);
       if (y < LANE_TOP - 20 || y > HIT_Y + 30) continue;
-      drawNote(n, y, "me");
+      drawNote(n, y, "me", loud);
     }
 
     // 按住中的长音：尾巴缩短，像被吸进去了
     const hd = live.hold;
     if (hd) {
       const n = hd.note;
-      const y = laneY(n.time);
-      const tailY = laneY(n.time + n.dur);
+      const y = laneY(n) + noteRow(n, "me");
+      const tailY = laneY(n, n.time + n.dur) + noteRow(n, "me");
       const k = Math.max(0, Math.min(1, (t - n.time) / Math.max(0.01, n.dur)));
       const top = tailY + (y - tailY) * k;
       ctx.fillStyle = hexA(LANE.me.main, 0.28);
@@ -381,13 +533,45 @@
       ctx.fillRect(LANE_MID.me - 5, y - 3, 10, 6);
     }
 
+    // 双人长按：两人一起按住的这段时间，两条轨道中间横一道金线；
+    // 快到她的松手点时收紧成一个圈——那就是要「一起松手」的窗口。
+    const bothState = live.both;
+    if (bothState && bothState.event) {
+      const ev = bothState.event;
+      const left = ev.time + ev.dur - t;
+      const a = left <= 0.6 ? 0.65 + 0.3 * Math.sin(t * 18) : 0.42;
+      const x0 = LANE_MID.her - 14;
+      const x1 = LANE_MID.me + 14;
+      // 先压一道深色底，再画金线：门和墙都是亮的，细线会直接消失
+      ctx.strokeStyle = "rgba(8,11,12,.6)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x0, HIT_Y + 12);
+      ctx.lineTo(x1, HIT_Y + 12);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,233,168," + a.toFixed(3) + ")";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x0, HIT_Y + 12);
+      ctx.lineTo(x1, HIT_Y + 12);
+      ctx.stroke();
+      if (left >= 0 && left <= 0.6) {
+        const r = 6 + (left / 0.6) * 16;
+        ctx.strokeStyle = "rgba(255,233,168," + (0.3 + 0.5 * (1 - left / 0.6)).toFixed(3) + ")";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(LANE_MID.me, HIT_Y + 12, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
     // 提示音符：她敲稿子之后，接下来四五个你的音符外面套一层虚线
     if (live.cue) {
       const id = live.cue.noteId;
       for (const n of live.mine) {
         if (n.judged) continue;
         if (n.id < id || n.id > id + live.cue.len) continue;
-        const y = laneY(n.time);
+        const y = laneY(n);
         if (y < LANE_TOP || y > HIT_Y) continue;
         const a = 0.30 + 0.30 * Math.sin(t * 12);
         ctx.strokeStyle = "rgba(244,236,221," + a.toFixed(3) + ")";
@@ -397,18 +581,47 @@
     }
   }
 
-  function drawNote(n, y, laneKey) {
+  /** 玩家轨上下两格的偏移。both 块站在中间。 */
+  function noteRow(n, laneKey) {
+    if (laneKey !== "me") return 0;
+    if (n.p === "hi") return HIT_ROW.hi;
+    if (n.p === "lo") return HIT_ROW.lo;
+    return 0;
+  }
+
+  /** 装饰音：小菱形，不抢正常音符的视线；可打可不打。 */
+  function drawGraceNote(n, y) {
+    const fade = Math.min(1, Math.max(0, (y - LANE_TOP) / 26));
+    const yy = y + noteRow(n, "me");
+    ctx.globalAlpha = fade * 0.9;
+    ctx.fillStyle = hexA("#ffe9a8", 0.9);
+    ctx.beginPath();
+    ctx.moveTo(LANE_MID.me, yy - 4);
+    ctx.lineTo(LANE_MID.me + 3, yy);
+    ctx.lineTo(LANE_MID.me, yy + 4);
+    ctx.lineTo(LANE_MID.me - 3, yy);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function drawNote(n, y, laneKey, loud) {
     const L = LANE[laneKey];
     const cx = LANE_MID[laneKey];
+    const row = noteRow(n, laneKey);
+    y += row;
     const fade = Math.min(1, Math.max(0, (y - LANE_TOP) / 26));
     const isCover = n.cover;
     const isRelay = n.type === "relay";
-    const col = isCover ? "#ffd9e2" : L.main;
+    const isBoth = !!n.both;
+    // 噪音 ≥50 时她的音符变灰：玩家能一眼看出「这一段电流不干净」
+    const greyed = laneKey === "her" && loud && !isCover;
+    const col = greyed ? "#9aa6aa" : isCover ? "#ffd9e2" : L.main;
     const alpha = (n.type === "hold" ? 0.95 : 1) * fade;
 
     // 长音的身子
     if (n.type === "hold") {
-      const tailY = y - n.dur * SPEED;
+      const tailY = y - n.dur * speedOf(n);
       const top = Math.max(LANE_TOP, tailY);
       ctx.fillStyle = hexA(col, 0.30);
       ctx.fillRect(cx - 5, top, 10, Math.max(0, y - top));
@@ -464,6 +677,12 @@
       ctx.fillRect(cx - half, y - 5, 6, 2);
       ctx.fillStyle = "rgba(12,16,18,.55)";
       ctx.fillRect(cx - half + 6, y - 5, 2, 10);
+    }
+    // both 块：白边，两条轨道一起按住的那一下
+    if (isBoth) {
+      ctx.strokeStyle = "rgba(255,233,168,.95)";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(cx - half - 1, y - 7, half * 2 + 2, 14);
     }
     ctx.globalAlpha = 1;
     if (fade < 1) return;
@@ -525,6 +744,25 @@
         ctx.moveTo(mid - 24, HIT_Y - 30 - k * 20);
         ctx.lineTo(mid + 24, HIT_Y - 30 - k * 20);
         ctx.stroke();
+      } else if (e.kind === "grace") {
+        // 装饰音命中：一圈很小的金色光圈，不抢判定字
+        ctx.strokeStyle = hexA(e.color, (1 - k) * 0.7);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(LANE_MID.me, HIT_Y, 4 + k * 9, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (e.kind === "both") {
+        ctx.strokeStyle = hexA(e.color, (1 - k) * 0.55);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(LANE_MID.her, HIT_Y - 14 - k * 10);
+        ctx.lineTo(LANE_MID.me, HIT_Y - 14 - k * 10);
+        ctx.stroke();
+      } else if (e.kind === "sync") {
+        // 收尾同步：两道金色横线从两条轨道中间向外扩散
+        const w = 26 + k * 50;
+        ctx.fillStyle = hexA(e.color, (1 - k) * 0.55);
+        ctx.fillRect((LANE_MID.her + LANE_MID.me) / 2 - w / 2, HIT_Y - 18 - k * 8, w, 2);
       }
     }
 
@@ -536,10 +774,14 @@
         const k = age / 0.55;
         const txt = last.tier === "perfect" ? "PERFECT"
           : last.tier === "good" ? "GOOD"
-            : last.tier === "ok" ? "OK" : "MISS";
+            : last.tier === "ok" ? "OK"
+              : last.tier === "wrong" ? "错键"
+                : last.tier === "grace" ? "＋50" : "MISS";
         const col = last.tier === "perfect" ? "#ffe9a8"
           : last.tier === "good" ? "#cfead8"
-            : last.tier === "ok" ? "#b9cbd8" : "#ff8f86";
+            : last.tier === "ok" ? "#b9cbd8"
+              : last.tier === "grace" ? "#ffe9a8"
+                : last.tier === "wrong" ? "#ffb36b" : "#ff8f86";
         ctx.save();
         ctx.globalAlpha = 1 - k * k;
         ctx.font = 'bold 10px "Microsoft YaHei",sans-serif';
@@ -609,14 +851,27 @@
     // 头几秒给一句操作提示，之后自己淡掉
     if (sc.state === "play" && sc.playElapsed < 8) {
       const a = Math.min(1, Math.max(0, (8 - sc.playElapsed) / 1.6)) * 0.55;
+      const teaching = chart.teaching && sc.state === "play" &&
+        audio.songTime() < chart.teaching.until;
       ctx.save();
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
       ctx.font = '9px "Microsoft YaHei",sans-serif';
       ctx.fillStyle = "rgba(242,233,218," + a.toFixed(3) + ")";
-      ctx.fillText("空格 · 接上她的话", 14, 252);
+      ctx.fillText(teaching
+        ? "J 高音 · F 低音（这段空格也行）"
+        : "J 高音 · F 低音", 14, 252);
       ctx.restore();
     }
+
+    // 档位：小字放在左下角，不抢音符的视线
+    ctx.save();
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.font = '7px "Microsoft YaHei",sans-serif';
+    ctx.fillStyle = "rgba(242,233,218,.30)";
+    ctx.fillText(difficulty + " · 电流 " + Math.round(st.noise), 14, 268);
+    ctx.restore();
 
     // 倒计时
     if (sc.state === "ready") {
@@ -663,6 +918,40 @@
     }
   }
 
+  // ---------------------------------------------------------------- 噪音演出
+
+  /** 噪音 ≥50：画面蒙一层灰、飘雪花点；≥80 再叠一层红色闪烁。
+   *  全用矩形和确定性伪随机画，不新增图片。 */
+  function drawNoiseLayer() {
+    if (!rhythm) return;
+    const n = rhythm.state.noise;
+    if (n < NOISE.grey) return;
+    const hot = Math.max(0, (n - NOISE.grey) / (NOISE.rescue - NOISE.grey));
+    ctx.save();
+    ctx.globalAlpha = 0.15 + 0.14 * hot;
+    ctx.fillStyle = "#8f9ba1";
+    ctx.fillRect(0, 0, W, H);
+    // 雪花点：种子按 1/12 秒取整，点位固定一段时间再换，不是逐帧乱跳
+    const seed = Math.floor(sc.t * 12) * 2654435761 >>> 0;
+    ctx.globalAlpha = 0.32 + 0.26 * hot;
+    for (let i = 0; i < 64; i++) {
+      const s = (Math.imul((seed + i * 374761393) >>> 0, 668265263) >>> 0);
+      const x = s & 0x1ff;
+      const y = ((s >>> 9) & 0xff) * (H / 255);
+      const w = 1 + ((s >>> 17) & 1);
+      ctx.fillStyle = i % 3 ? "rgba(248,240,228,.9)" : "rgba(130,150,158,.9)";
+      ctx.fillRect(x, y, w, w);
+    }
+    ctx.restore();
+    if (n >= NOISE.rescue) {
+      ctx.save();
+      ctx.globalAlpha = 0.06 + 0.06 * (0.5 + 0.5 * Math.sin(sc.t * 9));
+      ctx.fillStyle = "#ff6b5f";
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
+  }
+
   // ---------------------------------------------------------------- 主绘制
 
   function draw() {
@@ -687,6 +976,9 @@
     if (ready(room)) ctx.drawImage(room, DESK.x, DESK.y, DESK.w, DESK.h,
       DESK.x, DESK.y, DESK.w, DESK.h);
     ctx.restore();
+
+    // 噪音大了，整个屋子蒙灰、飘雪花点。只在演奏/收尾两段出现。
+    if (sc.state === "play" || sc.state === "finale") drawNoiseLayer();
 
     // 轨道和音符不吃镜头：它们是界面，不是屋子里的东西
     if (sc.laneFade > 0.01) {
@@ -726,8 +1018,9 @@
 
   function activeDisplay(t) {
     let idx = -1;
+    // 末段 108 BPM，字幕行不能再用「拍 × 固定秒数」算，改读谱面给的绝对时间
     for (let i = 0; i < chart.display.length; i++) {
-      if (chart.display[i].startBeat * chart.spb <= t + 0.05) idx = i;
+      if (chart.display[i].startTime <= t + 0.05) idx = i;
       else break;
     }
     return idx;
@@ -736,15 +1029,19 @@
   function buildScript(idx) {
     scrSpans = [];
     scrLine.innerHTML = "";
+    scrLine.classList.remove("burst");
     if (idx < 0) { scrWho.textContent = ""; return; }
     const d = chart.display[idx];
     scrWho.textContent = d.who === "both" ? "两人" : (d.who === "her" ? "朱里" : "和臣");
     scrWho.dataset.who = d.who;
+    // 突发段：词块顺序按谱面给的乱序摆，整行标红——但一个字都没改
+    scrLine.classList.toggle("burst", !!d.burst);
     for (const c of d.chunks) {
       const s = document.createElement("span");
       s.textContent = c.text;
       s.dataset.note = c.noteId;
       s.dataset.lane = c.lane;
+      if (d.burst) s.classList.add("burst");
       scrLine.appendChild(s);
       scrSpans.push({ el: s, note: c.noteId, lane: c.lane, cls: "" });
     }
@@ -756,13 +1053,19 @@
     if (idx < 0) return;
     const d = chart.display[idx];
     const rescued = rhythm.state.rescued;
+    // 噪音 ≥50：字幕条带雪花点（CSS 负责画点，这里只切类名）
+    const loud = rhythm.state.noise >= NOISE.grey;
+    if (loud !== sc.noisyShown) {
+      sc.noisyShown = loud;
+      el("script").classList.toggle("noisy", loud);
+    }
     for (const sp of scrSpans) {
       const n = noteById.get(sp.note);
       let cls;
       if (!n) cls = "";
       else if (n.judged) {
-        if (n.result === "miss") {
-          cls = rescued.indexOf(n.id) >= 0 ? "covered" : "missed";
+        if (n.result === "miss" || n.result === "wrong" || n.result === "covered") {
+          cls = rescued.indexOf(n.id) >= 0 ? "covered" : (n.result === "wrong" ? "wronged" : "missed");
         } else {
           cls = (n.heldRatio != null && n.heldRatio < 0.85) ? "partial" : "done";
         }
@@ -778,7 +1081,7 @@
       }
     }
     // 当前这一行说完了，把整行压暗一点，视线才会往下走
-    scrLine.classList.toggle("past", d.endBeat * chart.spb < t - 0.2);
+    scrLine.classList.toggle("past", d.endTime < t - 0.2);
   }
 
   // ---------------------------------------------------------------- 流程
@@ -787,11 +1090,26 @@
     sc.state = "intro";
     sc.t = 0;
     sc.walk = 0;
+    sc.everCleared = !!SAVE.cleared;
     sc.cam.z = 1.55;
     sc.cam.x = 256;
     sc.cam.y = 150;
     el("loading").classList.remove("show");
     el("script").classList.remove("show");
+    el("hud").classList.remove("show");
+    el("card").classList.remove("show");
+    el("bye").classList.remove("show");
+    el("diff").classList.remove("show");
+
+    // 过场接住几张稿纸只改念稿前的这句小动作字幕：不碰谱面，也不碰判定。
+    // 缺省 3 = 一张没掉 = 旧体验，所以老档不会多出一句话。
+    const papers = papersCaught();
+    sc.paperVariant = papers < 3;
+    const paperLine = papers >= 3 ? null
+      : papers === 2 ? "路上风大，有一张差点飞了，我按顺序理好了。"
+        : papers === 1 ? "路上掉了两张，我捡回来了，就是顺序有点乱。"
+          : "稿子都捡回来了。顺序我理过了。";
+
     if (FROM_BRIDGE) {
       sc.walk = 1;
       sc.doorOpen = 1;
@@ -800,10 +1118,11 @@
       sc.cam.tz = 1;
       sc.cam.x = sc.cam.tx = 256;
       sc.cam.y = sc.cam.ty = 144;
-      setTimeout(() => lines([
-        ["朱里", "先试试声音吧。"],
-        ["和臣", "好。"]
-      ], startCheck), 180);
+      setTimeout(() => {
+        const items = [["朱里", "先试试声音吧。"], ["和臣", "好。"]];
+        if (paperLine) items.push(["朱里", paperLine]);
+        lines(items, startCheck);
+      }, 180);
       return;
     }
     setTimeout(() => {
@@ -811,12 +1130,14 @@
       sc.walk = 0.001;
     }, 700);
     setTimeout(() => {
-      lines([
+      const items = [
         ["旁白", "我坐在左边的麦克风前。门开了，朱里拿着稿子走进来。"],
         ["朱里", "你先到了啊。稿子我带来了。"],
-        ["和臣", "嗯，先试试声音？"],
-        ["朱里", "好，跟着滴答声来。"]
-      ], startCheck);
+        ["和臣", "嗯，先试试声音？"]
+      ];
+      if (paperLine) items.push(["朱里", paperLine]);
+      items.push(["朱里", "好，跟着滴答声来。"]);
+      lines(items, startCheck);
     }, 1500);
   }
 
@@ -847,10 +1168,11 @@
     const delta = phase > audio.SPB / 2 ? phase - audio.SPB : phase;
     c.taps.push(delta);
     audio.click(audio.now());
-    if (c.taps.length >= c.need) finishCheck();
+    if (c.taps.length >= c.need) finishCheck(false);
   }
 
-  function finishCheck() {
+  /** 试音结束。auto = 自检/演示：直接按存档档位进倒计时；否则弹出档位选择。 */
+  function finishCheck(auto) {
     const c = sc.check;
     sc.check = null;
     if (c && c.taps.length >= 4) {
@@ -859,6 +1181,30 @@
       audio.setOffsetMs(Math.round(med * 1000));
       writeSave({ offset: audio.offsetMs() });
     }
+    if (auto) applyDifficulty(difficulty, true);
+    else showDiff();
+  }
+
+  /** 试音之后、正式录之前选档位。两档共用同一次校准出来的 offsetMs。 */
+  function showDiff() {
+    sc.state = "diff";
+    dlg = null;
+    dlgEl.classList.remove("show");
+    el("script").classList.remove("show");
+    const box = el("diff");
+    box.classList.add("show");
+    const note = el("diffNote");
+    if (note) note.textContent = (DIFFS[difficulty] || DIFFS[DEFAULT_DIFF]).note;
+    for (const b of box.querySelectorAll("[data-d]")) {
+      b.classList.toggle("on", b.dataset.d === difficulty);
+    }
+  }
+
+  function applyDifficulty(name, silent) {
+    difficulty = name === "电台" ? "电台" : "演播";
+    saveDifficulty(difficulty);
+    el("diff").classList.remove("show");
+    if (!silent) audio.click(audio.now());
     startReady();
   }
 
@@ -868,21 +1214,33 @@
     dlg = null;
     dlgEl.classList.remove("show");
     sc.readyT = 0;
+    sc.finished = false;
+    sc.playEndT = 0;
+    sc.onAir = 0;
+    sc.finishStats = null;
+    sc.burstToast = false;
+    sc.noisyShown = false;
     sc.cam.tz = 1;
     sc.cam.tx = 256;
     sc.cam.ty = 144;
+    // 每录一遍都重新生成谱面：突发段落在哪四小节由这一局的种子决定
+    createRun();
+    scrIdx = -1;
+    scrSpans = [];
+    scrLine.innerHTML = "";
+    scrLine.classList.remove("burst", "past");
+    el("script").classList.remove("noisy");
+    audio.setMusic(true);      // 上一遍收尾时把 BGM 压掉了，重录要还回来
     audio.startSong(3.15);
-    rhythm.reset();
     el("hud").classList.add("show");
     el("script").classList.add("show");
-    scrIdx = -1;
     setTimeout(() => { sc.onAir = 1; audio.click(audio.now()); }, 300);
   }
 
   function startPlay() {
     sc.state = "play";
     sc.playElapsed = 0;
-    global.dispatchEvent(new CustomEvent("broadcast:start", { detail: { chart } }));
+    global.dispatchEvent(new CustomEvent("broadcast:start", { detail: { chart, difficulty } }));
   }
 
   function startFinale() {
@@ -890,6 +1248,8 @@
     sc.finaleT = 0;
     fx.length = 0;
     audio.setMusic(false);
+    el("script").classList.remove("noisy");
+    sc.noisyShown = false;
     setTimeout(() => {
       audio.stopSong();
       sc.onAir = 0;
@@ -912,6 +1272,7 @@
     }, 1600);
   }
 
+  /** 完成卡：总评级 + 五段结算 + 收尾同步，并写 act3-result-v1（第四幕读它做回响）。 */
   function showCard(st) {
     sc.state = "done";
     const card = el("card");
@@ -920,12 +1281,69 @@
       "准确率 " + Math.round(st.accuracy * 100) + "%　最高连击 " + st.combo +
       "　她补位 " + st.rescues + " 次";
     el("score2").textContent = String(st.score);
+    if (el("meta")) {
+      el("meta").textContent = st.difficulty + "　电流最高 " + st.maxNoise +
+        "　装饰音 " + st.graces.hit + "/" + st.graces.total;
+    }
+    if (el("syncLine")) {
+      el("syncLine").textContent = st.syncBoth
+        ? "收尾同步 · 两个人在同一个窗口里松了手"
+        : "收尾同步 · 没对上";
+      el("syncLine").classList.toggle("on", !!st.syncBoth);
+    }
+    // 五段结算表：准确率 / 接力接住数 / 该段最高连击（评级规则不变，仍看总准确率）
+    const rows = el("segRows");
+    if (rows) {
+      rows.innerHTML = "";
+      for (const seg of st.segments) {
+        const tr = document.createElement("tr");
+        const acc = seg.total ? Math.round(seg.accuracy * 100) + "%" : "—";
+        tr.innerHTML =
+          "<td>" + seg.name + "</td>" +
+          "<td>" + acc + "</td>" +
+          "<td>" + seg.relaysCaught + "/" + seg.relaysTotal + "</td>" +
+          "<td>" + seg.maxCombo + "</td>";
+        rows.appendChild(tr);
+      }
+    }
     card.classList.add("show");
     el("script").classList.remove("show");
+    el("script").classList.remove("noisy");
+
+    // 存档：旧键只存 offset / cleared / best，语义一点没变；
+    // 分段成绩单独放在新键里，第四幕按它换开场台词。
+    const result = {
+      difficulty: st.difficulty,
+      rank: st.rank,
+      accuracy: +st.accuracy.toFixed(4),
+      score: st.score,
+      maxCombo: st.combo,
+      relaysCaught: st.relaysCaught,
+      relaysTotal: st.relaysTotal,
+      syncBoth: !!st.syncBoth,
+      maxNoise: st.maxNoise,
+      rescues: st.rescues,
+      segments: st.segments.map((s) => ({
+        name: s.name,
+        accuracy: +s.accuracy.toFixed(4),
+        relaysCaught: s.relaysCaught,
+        relaysTotal: s.relaysTotal,
+        maxCombo: s.maxCombo
+      })),
+      graces: { hit: st.graces.hit, total: st.graces.total },
+      counts: st.counts,
+      burst: !!(chart && chart.burst && chart.burst.on)
+    };
+    try { localStorage.setItem(RESULT_KEY, JSON.stringify(result)); } catch (e) { }
     const prev = SAVE.best || 0;
     if (st.score > prev) writeSave({ best: st.score });
     writeSave({ cleared: true });
-    global.dispatchEvent(new CustomEvent("broadcast:finish", { detail: st }));
+    SAVE.cleared = true;                          // 重录时不再强制触发突发段
+    SAVE.best = Math.max(prev, st.score);
+    sc.everCleared = true;
+    global.dispatchEvent(new CustomEvent("broadcast:finish", {
+      detail: Object.assign({}, st, { result })
+    }));
   }
 
   function startLeave() {
@@ -933,7 +1351,9 @@
     sc.state = "leave";
     sc.leaveT = 0;
     audio.stopSong();
+    el("diff").classList.remove("show");
     el("script").classList.remove("show");
+    el("script").classList.remove("noisy");
     el("dlg").classList.remove("show");
     dlg = null;
     setTimeout(() => {
@@ -951,7 +1371,6 @@
     sc.byeShown = false;
     if (sc.finished) { showCard(sc.finishStats || rhythm.stats()); return; }
     sc.playEndT = 0;
-    rhythm.reset();
     sc.cam.tz = 1; sc.cam.tx = 256; sc.cam.ty = 144;
     startReady();
   }
@@ -960,11 +1379,11 @@
 
   let holding = false;
 
-  function press() {
+  /** key = "hi"（J）| "lo"（F）| "any"（空格）| "auto"（点画面，自动对音高）。 */
+  function press(key) {
     if (sc.state === "check") { tapCheck(); return; }
     if (sc.state !== "play") return;
-    const r = rhythm.press(audio.songTime());
-    if (r) { /* 音效在 rhythm 里放了 */ }
+    rhythm.press(audio.songTime(), key == null ? "auto" : key);
   }
   function release() {
     if (sc.state !== "play") return;
@@ -979,6 +1398,12 @@
       startLeave();
       return;
     }
+    // 试音之后的档位选择：F/1 = 演播，J/2 = 电台，Enter = 用存过的档
+    if (sc.state === "diff") {
+      if (k === "f" || e.key === "1") { e.preventDefault(); applyDifficulty("演播"); return; }
+      if (k === "j" || e.key === "2") { e.preventDefault(); applyDifficulty("电台"); return; }
+      if (e.key === "Enter") { e.preventDefault(); applyDifficulty(difficulty); return; }
+    }
     if (dlg && (e.key === "Enter" || e.key === " " || k === "e")) {
       e.preventDefault();
       advance();
@@ -986,13 +1411,16 @@
     }
     if (sc.state === "check" && (e.key === "Enter")) {
       e.preventDefault();
-      finishCheck();
+      finishCheck(false);
       return;
     }
     if (e.key === " " || k === "f" || k === "j") {
       e.preventDefault();
       if (e.repeat) return;
-      if (!holding) { holding = true; press(); }
+      if (!holding) {
+        holding = true;
+        press(k === "f" ? "lo" : k === "j" ? "hi" : "any");
+      }
       return;
     }
   });
@@ -1005,10 +1433,10 @@
     }
   });
 
-  canvas.addEventListener("pointerdown", (e) => {
+  canvas.addEventListener("pointerdown", () => {
     if (sc.state === "intro" && dlg) { advance(); return; }
     if (sc.state === "check") { tapCheck(); return; }
-    if (sc.state === "play") { press(); }
+    if (sc.state === "play") { press("auto"); }
   });
   canvas.addEventListener("pointerup", () => { if (sc.state === "play") release(); });
 
@@ -1061,7 +1489,7 @@
     // 不这么兜底的话，少按一下会永远卡在试音这一步。
     if (sc.state === "check" && sc.check) {
       const c = sc.check;
-      if (audio.now() > c.start + c.total * audio.SPB + 1.2) finishCheck();
+      if (audio.now() > c.start + c.total * audio.SPB + 1.2) finishCheck(false);
     }
 
     if (sc.state === "play") {
@@ -1069,6 +1497,12 @@
       sc.playElapsed = (sc.playElapsed || 0) + dt;
       rhythm.update(t);
       syncScript(t);
+      // 突发段开始：只在画面上提示一句「稿纸乱了」，台词一个字没改
+      if (!sc.burstToast && chart.burst && chart.burst.on && t >= chart.burst.startTime) {
+        sc.burstToast = true;
+        toast("稿纸被碰乱了", "#ff8f86");
+        audio.tapPaper(audio.now());
+      }
       if (rhythm.state.finished) {
         sc.playEndT = (sc.playEndT || 0) + dt;
         if (sc.playEndT > 1.1) startFinale();
@@ -1095,15 +1529,26 @@
     el("card").classList.remove("show");
     sc.finished = false;
     sc.playEndT = 0;
-    sc.finalT = 0;
-    rhythm.reset();
     sc.cam.tz = 1; sc.cam.tx = 256; sc.cam.ty = 144;
     startReady();
   };
   el("out").onclick = () => { location.href = new URL("../act4/after-broadcast/index.html?from=broadcast", location.href).href; };
 
+  // 档位选择层：点按钮，或者用键盘 F/J
+  {
+    const box = el("diff");
+    if (box) {
+      for (const b of box.querySelectorAll("[data-d]")) {
+        b.onclick = () => applyDifficulty(b.dataset.d);
+      }
+    }
+  }
+
   global.__bc = {
-    audio, chart, rhythm, scene: sc,
+    audio, scene: sc,
+    get chart() { return chart; },
+    get rhythm() { return rhythm; },
+    get difficulty() { return difficulty; },
     state: () => ({
       state: sc.state,
       t: audio.songTime(),
@@ -1115,21 +1560,38 @@
       rescues: rhythm.state.rescues,
       finished: rhythm.state.finished,
       offsetMs: audio.offsetMs(),
+      noise: Math.round(rhythm.state.noise),
+      maxNoise: Math.round(rhythm.state.maxNoise),
+      difficulty,
+      syncBoth: !!rhythm.state.syncBoth,
+      burst: !!(chart && chart.burst && chart.burst.on),
+      paperVariant: sc.paperVariant,
       cam: { x: +sc.cam.x.toFixed(1), y: +sc.cam.y.toFixed(1), z: +sc.cam.z.toFixed(3) }
     }),
-    press, release, advance, startLeave, resumePlay,
+    press, release, advance, startLeave, resumePlay, chooseDifficulty: applyDifficulty,
+    papersCaught,
     stats: () => rhythm.stats(),
     // 自检用：直接跳到某个状态
     _skipToPlay() { sc.walk = 1; sc.veil = 0; sc.onAir = 1; startReady(); sc.readyT = 3.05; },
-    _finishCheck() { finishCheck(); },
+    _finishCheck() { finishCheck(true); },
+    _finishCheckUI() { finishCheck(false); },
     // 跳到某一秒（演示和截图用）
     _seek(t) { audio.seek(t); rhythm.skipTo(t); sc.playElapsed = 30; }
   };
 
   if (FRESH) {
-    try { localStorage.removeItem(SAVE_KEY); } catch (e) { }
+    try {
+      localStorage.removeItem(SAVE_KEY);
+      localStorage.removeItem(DIFF_KEY);
+      localStorage.removeItem(RESULT_KEY);
+    } catch (e) { }
+    SAVE.cleared = false;
+    SAVE.offset = 0;
+    SAVE.best = 0;
   }
+  difficulty = loadDifficulty();
   audio.setOffsetMs(SAVE.offset || 0);
+  createRun();
 
   requestAnimationFrame(loop);
   startIntro();

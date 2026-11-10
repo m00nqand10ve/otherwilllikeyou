@@ -136,7 +136,7 @@ body {
 
 /* ---------------------------------------------------------------- 完成卡 / 收尾卡 */
 
-#card, #bye {
+#card, #bye, #diff {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -144,6 +144,8 @@ body {
   z-index: 7;
   min-width: 46%;
   max-width: 82%;
+  max-height: 88%;
+  overflow: auto;
   padding: 1.3em 1.7em 1.2em;
   background: rgba(9, 12, 14, .96);
   border: 1px solid rgba(242, 233, 218, .2);
@@ -154,24 +156,33 @@ body {
   transition: opacity .4s ease, transform .4s ease;
   font-size: clamp(10px, 1.05cqw, 15px);
 }
-#card.show, #bye.show {
+#card.show, #bye.show, #diff.show {
   opacity: 1;
   pointer-events: auto;
   transform: translate(-50%, -50%);
 }
-#card h2, #bye h2 {
+#card h2, #bye h2, #diff h2 {
   margin: 0 0 .7em;
   font-size: 1.12em;
   font-weight: 600;
   letter-spacing: .14em;
   color: rgba(242, 233, 218, .9);
 }
-#bye p, #card p {
+#bye p, #card p, #diff p {
   margin: .3em 0;
   color: rgba(242, 233, 218, .74);
   line-height: 1.6;
 }
-#bye .note { font-size: .84em; color: rgba(242, 233, 218, .38); }
+#bye .note, #diff .note { font-size: .84em; color: rgba(242, 233, 218, .38); }
+
+/* 试音之后的档位选择：两个按钮，当前存档的那个高亮 */
+#diff { z-index: 8; }
+#diff .opt { min-width: 7.5em; }
+#diff .opt.on {
+  border-color: rgba(255, 233, 168, .75);
+  background: rgba(64, 54, 30, .95);
+  color: var(--gold);
+}
 
 #rank {
   font-size: 3.4em;
@@ -193,6 +204,51 @@ body {
   color: var(--paper);
   letter-spacing: .06em;
 }
+
+/* 本局档位 / 电流峰值 / 装饰音 */
+#meta {
+  font-size: .82em !important;
+  color: rgba(242, 233, 218, .45) !important;
+  letter-spacing: .06em;
+}
+
+/* 五段结算：像一张成绩单，一行一段 */
+#segWrap {
+  margin: .8em auto .2em;
+  max-width: 96%;
+  overflow-x: auto;
+}
+#segTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .84em;
+  color: rgba(242, 233, 218, .72);
+}
+#segTable th {
+  font-weight: 400;
+  font-size: .92em;
+  letter-spacing: .1em;
+  color: rgba(242, 233, 218, .38);
+  padding: .18em .5em .3em;
+  border-bottom: 1px solid rgba(242, 233, 218, .12);
+  white-space: nowrap;
+}
+#segTable td {
+  padding: .24em .5em;
+  border-bottom: 1px solid rgba(242, 233, 218, .06);
+  white-space: nowrap;
+}
+#segTable td:first-child { color: rgba(242, 233, 218, .82); letter-spacing: .08em; }
+#segTable tr:last-child td { border-bottom: none; }
+
+/* 收尾同步：成功时那行是金色的 */
+#syncLine {
+  margin-top: .5em !important;
+  font-size: .84em !important;
+  letter-spacing: .06em;
+  color: rgba(242, 233, 218, .38) !important;
+}
+#syncLine.on { color: var(--gold) !important; }
 
 .row {
   display: flex;
@@ -297,6 +353,35 @@ body {
   color: var(--her);
   text-shadow: 0 0 10px rgba(242, 168, 184, .35);
 }
+/* 错键：按错了键位，和「漏按」要分得出来 */
+#scrLine span.wronged {
+  color: #ffb36b;
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 179, 107, .6);
+}
+
+/* 噪音 ≥50：字幕条后面浮一层雪花点，字也跟着发灰 */
+#script.noisy {
+  background-image:
+    radial-gradient(rgba(248, 240, 228, .26) 1px, transparent 1px),
+    radial-gradient(rgba(150, 170, 178, .22) 1px, transparent 1px);
+  background-size: 13px 11px, 7px 9px;
+  background-position: 0 0, 3px 4px;
+  animation: scr-noise 0.42s steps(3) infinite;
+}
+@keyframes scr-noise {
+  0% { background-position: 0 0, 3px 4px; }
+  50% { background-position: 2px 1px, 0 6px; }
+  100% { background-position: 1px 2px, 4px 1px; }
+}
+#script.noisy #scrLine span { filter: grayscale(.35); }
+
+/* 突发段：稿纸被碰乱的那四小节，词块顺序是乱的，整行标红（字一个没改） */
+#scrLine span.burst {
+  color: #ff8f86;
+  text-shadow: 0 0 10px rgba(255, 90, 80, .3);
+}
+#scrLine.burst { letter-spacing: .12em; }
 
 @media (max-width: 720px) {
   #script { padding: 0 1em; gap: .5em; }
