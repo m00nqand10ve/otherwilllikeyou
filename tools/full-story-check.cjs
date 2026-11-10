@@ -40,14 +40,25 @@ const read = (file) => fs.readFileSync(path.join(ROOT, file), "utf8");
     await page.evaluate(() => {
       localStorage.setItem("our-story-act5-daily-v1", JSON.stringify({ errandCompleted: true }));
       localStorage.setItem("our-story-act3-broadcast-v1", JSON.stringify({ best: 3 }));
+      // 第二、三幕新增的回响键也要清，不然二周目会带着上一轮的主题/难度/成绩
+      localStorage.setItem("our-story-act2-board-eval-v1", JSON.stringify({ theme: "sports" }));
+      localStorage.setItem("our-story-bridge-papers-v1", "1");
+      localStorage.setItem("act3-difficulty-v1", "电台");
+      localStorage.setItem("act3-result-v1", JSON.stringify({ relaysCaught: 1, relaysTotal: 5 }));
     });
     await page.click("#start");
     await page.waitForURL(/prototype\.html/, { timeout: 10000 });
     const left = await page.evaluate(() => ({
       daily: localStorage.getItem("our-story-act5-daily-v1"),
-      act3: localStorage.getItem("our-story-act3-broadcast-v1")
+      act3: localStorage.getItem("our-story-act3-broadcast-v1"),
+      boardEval: localStorage.getItem("our-story-act2-board-eval-v1"),
+      papers: localStorage.getItem("our-story-bridge-papers-v1"),
+      difficulty: localStorage.getItem("act3-difficulty-v1"),
+      result: localStorage.getItem("act3-result-v1")
     }));
     if (left.daily !== null || left.act3 !== null) fail("开始完整故事没有清掉旧存档");
+    if (left.boardEval !== null || left.papers !== null) fail("开始完整故事没有清掉第二幕的回响存档");
+    if (left.difficulty !== null || left.result !== null) fail("开始完整故事没有清掉第三幕的难度/成绩存档");
 
     // 只做了一点日常：继续上次应该回到校园日常
     await page.goto(indexUrl);
