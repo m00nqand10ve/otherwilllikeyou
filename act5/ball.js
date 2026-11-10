@@ -77,7 +77,52 @@
     feintMax: 2.0,
     stumble: 0.6,
     aiStun: 0.5,
-    goalPause: 1.5
+    goalPause: 1.5,
+
+    // ---- §6.1 防守分工 ----------------------------------------------------
+    roleHysteresis: 0.5,     // 换岗迟滞：连续 0.5 秒都该换才换
+    pressLead: 0.35,         // 上抢目标 = 玩家位置 + 速度 × 0.35s
+    pressLeadAhead: 0.45,    // §6.6 玩家领先两球时，提前量加大
+    coverDepth: 0.10,        // 守线点：距远门线 0.10 纵深
+
+    // ---- §6.2 朱里守门 ----------------------------------------------------
+    keeperTriggerD: 0.62,    // 玩家持球越过这条纵深 → cover 进守门态
+    keeperLine: 0.04,        // 站门线前 0.04
+    keeperLag: 0.12,         // 跟 aimX 的 120ms 反应延迟
+    keeperErr: 0.03,         // ±0.03 固定预判误差（整局不抖）
+    keeperErrLead: 0.02,     // §6.6 玩家领先两球时误差收小
+    keeperReach: 0.11,       // 横扑扑程（横向场地比）
+    keeperLowZ: 0.50,        // 低球才扑得到，高过这条线就从她头上过去
+    keeperBiasTrail: 0.04,   // §6.6 玩家落后两球时朱里偏一侧，露出远角
+
+    // ---- §6.3 触球系统 ----------------------------------------------------
+    dribbleSpeed: 0.78,      // 带球速度系数（无球仍 1.0）
+    touchOffset: 0.05,       // 球的目标点在持球人朝向 0.05 纵深前
+    touchFollow: 14,         // 跟随速率：每秒收敛 14 倍，速度越快滞后越大
+    turnWindow: 0.20,        // 急转判定窗口
+    turnLimit: 100 * Math.PI / 180,   // 0.2 秒内转向超过 100°
+    turnSlip: 0.02,          // 急转时球向外侧多滑 0.02
+    dashDepth: 0.16,         // Shift 拨球拨出 0.16 纵深
+    dashTime: 0.45,          // 拨球后 0.45 秒加速
+    dashMul: 1.15,           // 拨球后的加速倍率
+    dashCd: 2.5,             // 拨球冷却
+    stealRangeLoose: 26,     // 球离脚 > 0.035 时，电脑抢断距离放宽到 26
+
+    // ---- §6.4 开球修正 ----------------------------------------------------
+    kickoffProtect: 0.6,     // 开球保护只防贴脸
+    stealProtectYuno: 2.2,   // 抢断得手后的喘息（只对 steal）
+    stealProtectJurie: 2.4,
+
+    // ---- §6.5 射门三把锁 --------------------------------------------------
+    spreadBase: 0.010,       // σ = base + power²×powerW + 距离×distW + 压迫
+    spreadPower: 0.055,
+    spreadDistW: 0.020,
+    spreadPressure: 0.020,
+    pressureRange: 26,       // 身前扇区里的防守人 < 26px 算压迫
+    pressureChargeMul: 0.7,  // 被压迫时蓄力速度 ×0.7
+    weakPower: 0.25,         // 被压迫且力度 < 0.25 必踢呲
+    postTol: 0.008,          // 中柱判定半宽
+    saveLunge: 0.12          // 横扑动作时长（秒）
   };
 
   const NAME = { me: "我", yuno: "由乃", jurie: "朱里" };
@@ -125,7 +170,9 @@
 
   D.games.ball = function (host) {
     const A = makeActors();
-    const rnd = makeRnd(20261108);
+    let rnd = makeRnd(20261108);
+    // §6.2 守门的预判误差方向：整局固定，不逐帧抖（自检会按种子重掷）
+    let keeperErrDir = rnd() * 2 - 1;
 
     const el = {
       hud: document.getElementById("bgHud"),
@@ -170,19 +217,41 @@
     let stats = {
       tackles: 0, stumbles: 0, steals: 0, shots: 0,
       goalsFor: 0, goalsAgainst: 0, passes: 0,
-      feints: 0, airKicks: 0, saves: 0, duelFails: 0
+      feints: 0, airKicks: 0, saves: 0, duelFails: 0, turnSlips: 0, aiWindups: 0
     };
     let tipText = "";
     let actText = "";
     let boardKey = "";
     let hudPulse = 0;
 
+    // ---- §6 新增状态 ------------------------------------------------------
+    // 防守分工：近者上抢、远者守线；0.5 秒迟滞，防止两个人原地反复换岗。
+    let roles = { press: "yuno", cover: "jurie", want: "yuno", timer: 0 };
+    let keeperOn = false;        // §6.2 cover 是否进入守门态
+    let keeperLunge = null;      // 射门瞬间的横扑 { who, fromX, toX, t }
+    let keeperAimLog = [];       // aimX 的 120ms 延迟采样
+    let meVel = { x: 0, d: 0 };  // 玩家速度向量（上抢提前量用）
+    let ballOffFoot = 0;         // 球离持球人脚多远（世界单位）
+    let lastShot = null;         // 最近一脚射门的落点与结果（自检用）
+    let lastGoalSide = null;
+    let dashT = 0, dashCd = 0, shiftLatch = false;   // §6.3 Shift 拨球
+    let turnLog = [];            // 持球人近 0.2 秒的移动方向，用来判急转
+    let holderLast = { who: null, x: 0, d: 0 };
+    let slipCd = 0;
+
+    // ---- 自检入口用的开关（正常游玩不走这条路） ---------------------------
+    // simMode 打开后：update() 不再读 DOM / 对白 / 声音，键盘输入改由 simKeys 提供。
+    // shell 正常游玩仍然走 rAF → update()/draw()，路径一个字没变。
+    let simMode = false;
+    let simKeys = null;
+    let spreadScale = 1;         // §6.5 σ=0 自检开关
+
     // ---- 主动互动 ----------------------------------------------------------
     // F = 喊一声。不改球权、不改跑位，只是让场面里有人接话。
     function callOut() {
       if (state !== "play" || frozen || D.dialogOpen()) return;
       calls++;
-      D.audio.blip();
+      sfx("blip");
       if (ball.owner === "me") {
         D.react("我", "看好了。", 900);
         D.react("由乃", "看着呢。", 1400);
@@ -196,7 +265,30 @@
       }
     }
 
-    function spaceHeld() { return !!D.keys[" "] || touchHeld; }
+    function spaceHeld() {
+      if (simMode) return !!(simKeys && simKeys.space);
+      return !!D.keys[" "] || touchHeld;
+    }
+
+    // 键盘的两条轴。正常游玩仍走 D.axisX / D.axisY，手感不变；
+    // 只有自检的固定步进才从 simKeys 里读。
+    function inputX() {
+      if (simMode) return simKeys ? (simKeys.right ? 1 : 0) - (simKeys.left ? 1 : 0) : 0;
+      return D.axisX();
+    }
+    function inputY() {
+      if (simMode) return simKeys ? (simKeys.up ? 1 : 0) - (simKeys.down ? 1 : 0) : 0;
+      return D.axisY();
+    }
+    function shiftHeld() {
+      if (simMode) return !!(simKeys && simKeys.shift);
+      return !!D.keys["shift"];
+    }
+
+    // 音效走一层：自检的 headless 固定步进不该真的去开 Web Audio。
+    function sfx(name) {
+      if (!simMode) D.audio[name]();
+    }
 
     // ---------------------------------------------------------------- 短气泡
 
@@ -245,7 +337,10 @@
       syncBallScreen();
     }
 
-    function giveBall(who) {
+    /** 球权交给谁。src 记来源，只有三种：steal（抢断）、kickoff（开球）、pass（做球 / 捡球）。
+     *  §6.4：2.2 / 2.4 秒的喘息保护只对 steal 生效；开球只留 0.6 秒，够防贴脸就行。 */
+    function giveBall(who, src) {
+      const from = src || "pass";
       ball.owner = who;
       ball.mode = "held";
       ball.lock = 0;
@@ -258,17 +353,30 @@
       charging = false;
       chargeT = 0;
       power = 0.3;
+      keeperLunge = null;
+      keeperAimLog = [];
+      dashT = 0;
+      ballOffFoot = 0;
+      turnLog = [];
+      slipCd = 0;
       const a = A[who];
       if (a) {
         a.face = who === "me" ? "up" : "down";
         a.dir = a.face;
         a.moving = false;
+        holderLast = { who: who, x: a.x, d: a.d };
       }
       if (who === "me") {
         armed = !spaceHeld();
-        // 刚断下球的一瞬间给一点喘息：不然电脑贴身贴着，蓄力还没抬脚就被反抢
-        yunoTackleCd = Math.max(yunoTackleCd, 2.2);
-        jurieTackleCd = Math.max(jurieTackleCd, 2.4);
+        // 刚断下球的一瞬间给一点喘息：不然电脑贴身贴着，蓄力还没抬脚就被反抢。
+        // 开球是另一种情况——只防贴脸，不让玩家抱着保护一路带。
+        if (from === "steal") {
+          yunoTackleCd = Math.max(yunoTackleCd, CFG.stealProtectYuno);
+          jurieTackleCd = Math.max(jurieTackleCd, CFG.stealProtectJurie);
+        } else if (from === "kickoff") {
+          yunoTackleCd = Math.max(yunoTackleCd, CFG.kickoffProtect);
+          jurieTackleCd = Math.max(jurieTackleCd, CFG.kickoffProtect);
+        }
       }
       if (who === "yuno") {
         feintTimer = CFG.feintMin + rnd() * (CFG.feintMax - CFG.feintMin);
@@ -313,17 +421,26 @@
       aimX = 0.5;
       aimAng = 0;
       trail = [];
+      // §6.4 开球阵型改成有纵深的三个点：中路不再是一条空道。
+      // 玩家开球：由乃在上抢位、朱里在守线位；对面开球时站位一样，由乃站在球后面。
+      place("me", 0.50, 0.30, "up");
       if (who === "me") {
-        // 玩家开球：两个人往两侧退开，让出中间那一步和一条带球的线
-        place("me", 0.50, 0.40, "up");
-        place("yuno", 0.68, 0.68, "down");
-        place("jurie", 0.32, 0.74, "down");
+        place("yuno", 0.56, 0.55, "down");
+        place("jurie", 0.44, 0.80, "down");
       } else {
-        place("me", 0.50, 0.28, "up");
-        place("yuno", 0.50, 0.54, "down");
-        place("jurie", 0.64, 0.66, "down");
+        place("yuno", 0.50, 0.56, "down");
+        place("jurie", 0.44, 0.80, "down");
       }
-      giveBall(who);
+      roles = { press: "yuno", cover: "jurie", want: "yuno", timer: 0 };
+      keeperOn = false;
+      keeperLunge = null;
+      keeperAimLog = [];
+      lastShot = null;
+      meVel = { x: 0, d: 0 };
+      ballOffFoot = 0;
+      turnLog = [];
+      holderLast = { who: who, x: A[who].x, d: A[who].d };
+      giveBall(who, "kickoff");
       refreshScreen();
     }
 
@@ -341,10 +458,85 @@
       return Math.atan2(lateral, aimDepthPx());
     }
 
+    // ---- §6.5 射门三把锁 --------------------------------------------------
+
+    /** 身前扇区：防守人挡在玩家和球门之间、距离 < 26px 才算压迫。 */
+    function defenderInFront() {
+      for (const k of ["yuno", "jurie"]) {
+        const who = A[k];
+        const dx = who.sx - A.me.sx;
+        const dy = A.me.sy - who.sy;          // 正数 = 在玩家身前（屏幕上更高）
+        if (dy <= 0) continue;
+        if (Math.hypot(dx, dy) > CFG.pressureRange) continue;
+        if (Math.abs(dx) > dy * 1.6) continue; // 身前约 ±58° 的扇区
+        if ((k === "yuno" ? yunoStun : jurieStun) > 0) continue;
+        return true;
+      }
+      return false;
+    }
+
+    /** σ = base + power²×powerW + 距离系数×distW +（被压迫 ? 0.020 : 0）。
+     *  距离系数：离门越远越大，0（禁区里）~1（后场）。 */
+    function spreadSigma(powerLevel, meD, pressured) {
+      const distFactor = D.clamp((1 - meD - 0.20) / 0.70, 0, 1);
+      let s = CFG.spreadBase + CFG.spreadPower * powerLevel * powerLevel +
+        CFG.spreadDistW * distFactor;
+      if (pressured) s += CFG.spreadPressure;
+      return s;
+    }
+
+    function shotSpread(powerLevel) {
+      return spreadSigma(powerLevel, A.me.d, defenderInFront());
+    }
+
+    /** 出手落点 = 瞄准点 + 本局种子给出的偏移。spreadScale = 0 时严格等于瞄准点。 */
+    function spreadLanding(x, z, powerLevel) {
+      if (!(spreadScale > 0)) return { x: x, z: z };
+      const sigma = shotSpread(powerLevel) * spreadScale;
+      if (!(sigma > 0)) return { x: x, z: z };
+      // 两次种子随机拼一个近似正态，整局可复现
+      const u1 = Math.max(1e-7, rnd());
+      const u2 = rnd();
+      const gauss = Math.sqrt(-2 * Math.log(u1)) * Math.cos(TAU * u2);
+      return { x: D.clamp(x + gauss * sigma, CFG.xMin, CFG.xMax), z: z };
+    }
+
+    function markShot(result, extra) {
+      if (!lastShot) return;
+      lastShot.result = result;
+      if (extra) Object.assign(lastShot, extra);
+    }
+
+    /** §6.2 守门横扑判定：落点在扑程里、且是低球（z1 < 0.50）才扑得到。
+     *  出手瞬间 keeper 已经在守门态就直接判；如果球飞起来才触发守门，下一帧再补判。 */
+    function keeperDecideSave() {
+      if (!shot || shot.from !== "me" || shot.saveDecided) return;
+      shot.saveDecided = true;
+      const kp = A[roles.cover];
+      keeperLunge = {
+        who: roles.cover, fromX: kp.x,
+        toX: D.clamp(shot.x1, kp.x - CFG.keeperReach, kp.x + CFG.keeperReach),
+        t: 0
+      };
+      if (Math.abs(shot.x1 - kp.x) <= CFG.keeperReach && shot.z1 < CFG.keeperLowZ) {
+        shot.save = { who: roles.cover };
+      }
+      if (lastShot && lastShot.result === "flying") {
+        lastShot.save = shot.save ? shot.save.who : null;
+      }
+    }
+
     /** 一脚射出去。x1 / z1 是门线上的落点：横向位置和离地高度。
      *  球在飞行途中穿过防守人的纵深时，只有高度低于 blockHeight 才会被挡。 */
     function shoot(who, x1, z1, powerLevel) {
       const a = A[who];
+      // §6.5 第一把锁：玩家出手落点带力量-准度散布（σ 见 shotSpread）
+      const aim = { x: x1, z: z1 };
+      if (who === "me") {
+        const l = spreadLanding(x1, z1, powerLevel);
+        x1 = l.x;
+        z1 = l.z;
+      }
       const targetD = who === "me" ? 1 : 0;
       const dist = Math.abs(targetD - a.d);
       const speed = 0.55 + 0.75 * powerLevel;
@@ -352,6 +544,15 @@
         from: who, targetD: targetD,
         x0: a.x, d0: a.d, x1: x1, z1: z1,
         t: 0, dur: D.clamp(dist / speed, 0.20, 1.0), power: powerLevel
+      };
+      // §6.2 射门出手瞬间，守门的 cover 朝预测落点横扑；
+      // 落点在扑程内、且是低球（z1 < 0.50）才扑得到，打她反方向 / 打高球是正解。
+      keeperLunge = null;
+      if (who === "me" && keeperOn) keeperDecideSave();
+      lastShot = {
+        from: who, result: "flying", x0: a.x, d0: a.d, x1: x1, z1: z1,
+        aim: aim, power: powerLevel, t: clock,
+        save: shot.save ? shot.save.who : null
       };
       ball.owner = null;
       ball.mode = "shot";
@@ -366,7 +567,7 @@
       aiSteal = null;
       charging = false;
       if (who === "me") stats.shots++;
-      D.audio.step();
+      sfx("step");
       syncBallScreen();
     }
 
@@ -393,15 +594,16 @@
       ball.lock = 0.22;
       ball.spin = 0;
       stats.shots++;
-      D.audio.wrong();
+      sfx("wrong");
       if (who === "me") bark("me", "没踢上力。", 900);
       syncBallScreen();
     }
 
-    function blockShot(who) {
-      giveBall(who);
+    function blockShot(who, kind) {
+      giveBall(who, "pass");
       stats.saves++;
-      D.audio.click();
+      markShot(kind || "block", { by: who });
+      sfx("click");
       bark(who, "挡住了。", 900);
     }
 
@@ -422,6 +624,16 @@
       }
       for (const q of trail) q.life -= dt * 2.2;
       trail = trail.filter(function (q) { return q.life > 0; });
+
+      // §6.2 球已经在飞向远门才触发守门的话，下一帧再补一次扑救判定
+      if (shot.from === "me" && keeperOn && !shot.saveDecided) keeperDecideSave();
+
+      // §6.2 守门员横扑：球飞到门线前那一下才真的挡下来（giveBall 会让守门人拿球）
+      if (shot.save) {
+        const kd = 1 - CFG.keeperLine;
+        const crossedKeeper = (prevD <= kd && kd <= ball.d) || (ball.d <= kd && kd <= prevD);
+        if (crossedKeeper) { blockShot(shot.save.who, "save"); return; }
+      }
 
       const defenders = shot.from === "me" ? ["yuno", "jurie"] : ["me"];
       for (const k of defenders) {
@@ -447,7 +659,31 @@
     function resolveShot() {
       const s = shot;
       shot = null;
+      keeperLunge = null;
       const mouth = CFG.goalX;
+      // §6.5 第三把锁：中柱。落点贴着门柱、又在门高内 → 弹出来，球变 loose
+      const hitPost =
+        (Math.abs(s.x1 - mouth[0]) < CFG.postTol || Math.abs(s.x1 - mouth[1]) < CFG.postTol) &&
+        s.z1 <= CFG.goalHeight;
+      if (hitPost) {
+        const atFarPost = s.targetD === 1;
+        ball.owner = null;
+        ball.mode = "loose";
+        ball.x = D.clamp(s.x1, CFG.xMin, CFG.xMax);
+        ball.d = atFarPost ? CFG.dMax : CFG.dMin;
+        ball.z = 0.08;
+        ball.vz = 0;
+        ball.vx = s.x1 < 0.5 ? -0.55 : 0.55;   // 往门柱外侧弹
+        ball.vd = atFarPost ? -0.28 : 0.28;    // 再弹回场内
+        ball.lock = 0.20;
+        ball.spin = 0;
+        stats.posts++;
+        markShot("post");
+        sfx("wrong");
+        bark(s.from, "中柱。", 900);
+        syncBallScreen();
+        return;
+      }
       const inMouth = s.x1 > mouth[0] && s.x1 < mouth[1];
       const underBar = s.z1 <= CFG.goalHeight;
       if (inMouth && underBar) {
@@ -466,7 +702,8 @@
       ball.vd = atFar ? -0.20 : 0.20;
       ball.lock = 0.15;
       ball.spin = 0;
-      D.audio.wrong();
+      markShot(underBar ? "miss" : "high");
+      sfx("wrong");
       bark(s.from, underBar ? "偏了。" : "高了。", 900);
       syncBallScreen();
     }
@@ -474,6 +711,9 @@
     function goal(side) {
       if (side === "me") { scoreMe++; stats.goalsFor++; }
       else { scoreThem++; stats.goalsAgainst++; }
+      lastGoalSide = side;
+      markShot("goal");
+      keeperLunge = null;
       state = "goalPause";
       goalPause = CFG.goalPause;
       goalFxT = 0;
@@ -495,8 +735,8 @@
       chargeT = 0;
       trail = [];
       hudPulse = 0.5;
-      el.hud.classList.add("pulse");
-      D.audio.right();
+      if (!simMode) el.hud.classList.add("pulse");
+      sfx("right");
       syncBallScreen();
       syncHud();
     }
@@ -568,7 +808,7 @@
         flash: 0
       };
       A[who].moving = false;
-      D.audio.blip();
+      sfx("blip");
     }
 
     function resolveDuel(side) {
@@ -576,17 +816,17 @@
       const who = duel.who;
       if (side !== duel.guard) {
         duel = null;
-        giveBall("me");
+        giveBall("me", "steal");
         stats.tackles++;
         tackleCd = CFG.tackleCd;
-        D.audio.right();
+        sfx("right");
         bark("me", "断下来了。", 800);
       } else {
         duel = null;
         stumbleT = CFG.stumble;
         stats.duelFails++;
         tackleCd = CFG.tackleCd + 0.2;
-        D.audio.wrong();
+        sfx("wrong");
         bark(who, who === "yuno" ? "这边。" : "……这边。", 900);
       }
     }
@@ -599,7 +839,7 @@
         if (duel.willSwitch) {
           duel.guard = duel.guard === "up" ? "down" : "up";
           duel.flash = 0.22;
-          D.audio.blip();
+          sfx("blip");
         }
       }
       if (duel.t >= duel.dur) {
@@ -619,7 +859,7 @@
           stumbleT = CFG.stumble;
           stats.stumbles++;
           feintT = 0;
-          D.audio.wrong();
+          sfx("wrong");
           bark("yuno", "过。", 900);
           return;
         }
@@ -631,7 +871,7 @@
           distPx(A.me.sx, A.me.sy, ball.sx, ball.sy) <= CFG.tackleRange) {
         giveBall("me");
         tackleCd = CFG.tackleCd;
-        D.audio.right();
+        sfx("right");
         bark("me", "拿到了。", 800);
       }
     }
@@ -640,10 +880,13 @@
       if (ball.owner !== "me" || stumbleT > 0 || aiSteal) return;
       const cd = who === "yuno" ? yunoTackleCd : jurieTackleCd;
       if (cd > 0) return;
-      if (screenDist(A[who], A.me) > CFG.aiStealRange) return;
+      // §6.3 球离脚 > 0.035 的那一瞬（急转外滑 / 拨球），抢断距离从 20 放宽到 26
+      const range = ballOffFoot > 0.035 ? CFG.stealRangeLoose : CFG.aiStealRange;
+      if (screenDist(A[who], A.me) > range) return;
       // 不立刻得手，先抬手。玩家在这 0.32 秒里跑开或者把球踢出去，这一下就空了。
-      aiSteal = { who: who, t: 0 };
-      D.audio.blip();
+      aiSteal = { who: who, t: 0, range: range };
+      stats.aiWindups++;
+      sfx("blip");
     }
 
     function updateAiSteal(dt) {
@@ -653,16 +896,16 @@
       if (ball.owner !== "me" || stumbleT > 0) { aiSteal = null; return; }
       const cd = who === "yuno" ? yunoTackleCd : jurieTackleCd;
       if (cd > 0) { aiSteal = null; return; }
-      if (screenDist(A[who], A.me) > CFG.aiStealRange + 6) { aiSteal = null; return; }
+      if (screenDist(A[who], A.me) > (aiSteal.range || CFG.aiStealRange) + 6) { aiSteal = null; return; }
       aiSteal.t += dt;
       if (aiSteal.t < CFG.aiStealWindup) return;
 
       aiSteal = null;
-      giveBall(who);
+      giveBall(who, "steal");
       stats.steals++;
       if (who === "yuno") yunoTackleCd = 2.4;
       else jurieTackleCd = 3.0;
-      D.audio.click();
+      sfx("click");
       bark(who, who === "yuno" ? "球给我。" : "……给我。", 800);
     }
 
@@ -671,8 +914,8 @@
     function movePlayer(dt) {
       const a = A.me;
       if (stumbleT > 0 || charging) { a.moving = false; return; }
-      let ax = D.axisX();
-      let ay = D.axisY();
+      let ax = inputX();
+      let ay = inputY();
       if (!ax && !ay) {
         a.moving = false;
         if (ball.owner === "me") a.face = "up";
@@ -681,7 +924,11 @@
       const len = Math.hypot(ax, ay);
       ax /= len;
       ay /= len;
-      const speed = CFG.playerSpeed * (ball.owner === "me" ? 0.95 : 1);
+      // §6.3 带球速度系数 0.95 → 0.78：无球 96 仍是全场最快，优势从「带球碾压」变成「无球跑位」。
+      //      Shift 拨球后的 0.45 秒里再加速到 1.15 倍。
+      let speed = CFG.playerSpeed;
+      if (ball.owner === "me") speed *= CFG.dribbleSpeed;
+      if (dashT > 0) speed *= CFG.dashMul;
       a.x = D.clamp(a.x + ax * speed / widthAt(a.d) * dt, CFG.xMin, CFG.xMax);
       a.d = D.clamp(a.d + ay * speed / (CFG.nearY - CFG.farY) * dt, CFG.dMin, CFG.dMax);
       // ay 是纵深轴（+1 往远处），屏幕上的 y 正好相反，换朝向时要翻一下。
@@ -713,6 +960,93 @@
       a.face = faceFromDelta(dx, dy);
       a.dir = a.face;
       a.moving = true;
+    }
+
+    // ---- §6.3 触球系统 ----------------------------------------------------
+
+    /** 球在持球人脚下应该待的位置：朝向前方 0.05 纵深。 */
+    function touchTarget(who) {
+      const a = A[who];
+      let ox = 0, od = 0;
+      if (a.face === "up") od = CFG.touchOffset;
+      else if (a.face === "down") od = -CFG.touchOffset;
+      else if (a.face === "left") ox = -CFG.touchOffset;
+      else if (a.face === "right") ox = CFG.touchOffset;
+      return {
+        x: D.clamp(a.x + ox, CFG.xMin, CFG.xMax),
+        d: D.clamp(a.d + od, CFG.dMin, CFG.dMax)
+      };
+    }
+
+    /** 球不再粘脚：以有限速率追目标点（跑得越快落后越多）；
+     *  急转 >100°/0.2s 时球向外侧多滑 0.02——是趟球失误，不是直接丢球。 */
+    function updateTouch(dt) {
+      if (!ball.owner || ball.mode !== "held") { ballOffFoot = 0; return; }
+      const who = ball.owner;
+      const a = A[who];
+      const target = touchTarget(who);
+      const k = 1 - Math.exp(-CFG.touchFollow * dt);
+      ball.x = lerp(ball.x, target.x, k);
+      ball.d = lerp(ball.d, target.d, k);
+      ball.z = 0.06;
+      ball.vx = 0; ball.vd = 0; ball.vz = 0;
+
+      const vx = dt > 0 ? (a.x - holderLast.x) / dt : 0;
+      const vd = dt > 0 ? (a.d - holderLast.d) / dt : 0;
+      holderLast.x = a.x;
+      holderLast.d = a.d;
+      holderLast.who = who;
+      const speed = Math.hypot(vx, vd);
+      if (speed > 0.06) {
+        const ang = Math.atan2(vd, vx);
+        const expect = clock - CFG.turnWindow;
+        turnLog.push({ t: clock, ang: ang });
+        while (turnLog.length > 24) turnLog.shift();
+        let old = null;
+        for (let i = turnLog.length - 1; i >= 0; i--) {
+          if (turnLog[i].t <= expect) { old = turnLog[i]; break; }
+        }
+        if (old && slipCd <= 0) {
+          let diff = ang - old.ang;
+          while (diff > Math.PI) diff -= TAU;
+          while (diff < -Math.PI) diff += TAU;
+          if (Math.abs(diff) > CFG.turnLimit) {
+            // 顺着原来的方向往外滑 0.02：玩家还能追回来，但上抢的人能利用这一瞬
+            ball.x = D.clamp(ball.x + Math.cos(old.ang) * CFG.turnSlip, CFG.xMin, CFG.xMax);
+            ball.d = D.clamp(ball.d + Math.sin(old.ang) * CFG.turnSlip, CFG.dMin, CFG.dMax);
+            slipCd = 0.25;
+            turnLog = [];
+            stats.turnSlips++;
+          }
+        }
+      }
+      ballOffFoot = Math.hypot(ball.x - a.x, ball.d - a.d);
+      syncBallScreen();
+    }
+
+    /** §6.3 Shift 拨球：球向前拨 0.16 纵深，自己 0.45 秒加速到 1.15 倍，冷却 2.5 秒。
+     *  拨球期间球不受控（loose），守线的人有机会拦截——玩家版的「过人」。 */
+    function tryDash() {
+      if (state !== "play" || (!simMode && D.dialogOpen())) return;
+      if (charging || stumbleT > 0 || dashCd > 0) return;
+      if (ball.owner !== "me" || ball.mode !== "held") return;
+      const a = A.me;
+      dashT = CFG.dashTime;
+      dashCd = CFG.dashCd;
+      ball.owner = null;
+      ball.mode = "loose";
+      ball.x = a.x;
+      ball.d = D.clamp(a.d + CFG.dashDepth, CFG.dMin, CFG.dMax);
+      ball.z = 0.05;
+      ball.vx = 0;
+      ball.vd = 0.04;      // 拨出去的球自己几乎不滚，靠人追
+      ball.vz = 0;
+      ball.lock = 0.10;
+      ball.spin = 0;
+      trail = [];
+      ballOffFoot = CFG.dashDepth;
+      turnLog = [];
+      syncBallScreen();
     }
 
     // ---------------------------------------------------------------- AI
@@ -750,7 +1084,7 @@
         stats.airKicks++;
         jurieStun = 0.55;
         jurieActionCd = 1.3;
-        D.audio.wrong();
+        sfx("wrong");
         bark("jurie", "……踢空了。", 1000);
         return;
       }
@@ -762,6 +1096,150 @@
       }
       aiShoot("jurie");
       jurieActionCd = 2.2;
+    }
+
+    // ---- §6.1 防守分工 / §6.2 守门 ---------------------------------------
+
+    /** 球现在大概在哪个场地坐标（有人持球就用他的位置）。 */
+    function ballPoint() {
+      if (ball.owner) { const a = A[ball.owner]; return { x: a.x, d: a.d }; }
+      return { x: ball.x, d: ball.d };
+    }
+
+    function keeperInfo() {
+      if (!keeperOn) return { active: false, who: null, x: 0.5, d: 1 - CFG.keeperLine };
+      const who = roles.cover;
+      return { active: true, who: who, x: A[who].x, d: A[who].d };
+    }
+
+    /** 每帧按「谁离球近」分一次工：近者上抢、远者守线；换岗带 0.5 秒迟滞。 */
+    function updateRoles(dt) {
+      if (ball.owner === "yuno" || ball.owner === "jurie") {
+        roles.press = ball.owner;
+        roles.cover = ball.owner === "yuno" ? "jurie" : "yuno";
+        roles.want = ball.owner;
+        roles.timer = 0;
+        keeperOn = false;
+        keeperLunge = null;
+        return;
+      }
+      const bp = ballPoint();
+      const bsx = sxAt(bp.x, bp.d), bsy = syAt(bp.d);
+      const dy = distPx(A.yuno.sx, A.yuno.sy, bsx, bsy);
+      const dj = distPx(A.jurie.sx, A.jurie.sy, bsx, bsy);
+      const want = dy <= dj ? "yuno" : "jurie";
+      if (want !== roles.want) { roles.want = want; roles.timer = 0; }
+
+      // §6.2 守门触发：玩家持球且越过 0.62，或球正飞向远门
+      const attacking = ball.owner === "me";
+      const flyingHome = ball.mode === "shot" && !!shot && shot.targetD === 1;
+      const rollingHome = ball.mode === "loose" && ball.vd > 0.06 && ball.d > 0.55;
+      const wasKeeper = keeperOn;
+      keeperOn = (attacking && A.me.d >= CFG.keeperTriggerD) || flyingHome || rollingHome;
+      if (!keeperOn) keeperLunge = null;
+      // 守门时不再换岗（免得两个人来回跑）；平时才走迟滞换岗
+      if (keeperOn) {
+        if (!wasKeeper) roles.timer = 0;
+        return;
+      }
+      if (want !== roles.press) {
+        roles.timer += dt;
+        if (roles.timer >= CFG.roleHysteresis) {
+          roles.press = want;
+          roles.cover = want === "yuno" ? "jurie" : "yuno";
+          roles.timer = 0;
+        }
+      } else {
+        roles.timer = 0;
+      }
+    }
+
+    /** §6.6 比分起伏的隐性平衡：领先两球时上抢提前量更大、守门误差更小；
+     *  落后两球时朱里守线偏一侧，露出远角。不提示、不说破。 */
+    function pressLeadNow() {
+      return (scoreMe - scoreThem >= 2) ? CFG.pressLeadAhead : CFG.pressLead;
+    }
+    function keeperErrNow() {
+      return (scoreMe - scoreThem >= 2) ? CFG.keeperErrLead : CFG.keeperErr;
+    }
+    function coverBiasNow(who) {
+      return (scoreThem - scoreMe >= 2 && who === "jurie") ? CFG.keeperBiasTrail : 0;
+    }
+
+    /** 上抢目标点：玩家持球时 = 玩家位置 + 速度向量 × 提前量（领先两球时提前量更大）；
+     *  散球 / 飞行中的球就直接去追球，不然球滚到角上没人捡。 */
+    function pressSpot() {
+      if (!ball.owner) return { x: ball.x, d: ball.d };
+      const lead = pressLeadNow();
+      return {
+        x: D.clamp(A.me.x + meVel.x * lead, CFG.xMin, CFG.xMax),
+        d: D.clamp(A.me.d + meVel.d * lead, CFG.dMin, CFG.dMax)
+      };
+    }
+
+    /** 守线点：球与远门中心的连线上、距门线 0.10 纵深处，横向随球插值。
+     *  §6.6 玩家落后两球时朱里偏一侧 0.04，露出远角（不说破）。 */
+    function coverSpot(who) {
+      const bp = ballPoint();
+      const lineD = 1 - CFG.coverDepth;
+      let x;
+      if (bp.d < lineD - 0.001) {
+        const t = (lineD - bp.d) / (1 - bp.d);
+        x = lerp(bp.x, 0.5, t);
+      } else {
+        // 球已经比守线点还深：站在门线前，横向跟着球偏一点
+        x = lerp(bp.x, 0.5, 0.5);
+      }
+      x += coverBiasNow(who);
+      return { x: D.clamp(x, CFG.xMin, CFG.xMax), d: lineD };
+    }
+
+    /** 守门：站门线前 0.04，横向跟 aimX（120ms 延迟 + 整局固定误差），
+     *  射门出手瞬间朝预测落点横扑。 */
+    function updateKeeperAI(who, dt) {
+      const a = A[who];
+      // 扑救动作：射门出手后 0.12 秒内扑出去
+      if (keeperLunge && keeperLunge.who === who && ball.mode === "shot") {
+        keeperLunge.t += dt;
+        const k = D.clamp(keeperLunge.t / CFG.saveLunge, 0, 1);
+        a.x = lerp(keeperLunge.fromX, keeperLunge.toX, k);
+        a.d = 1 - CFG.keeperLine;
+        a.sx = sxAt(a.x, a.d);
+        a.sy = syAt(a.d);
+        a.scale = scaleAt(a.d);
+        a.face = "down"; a.dir = "down";
+        a.moving = k < 1;
+        return;
+      }
+      keeperAimLog.push({ t: clock, x: charging ? aimX : 0.5 });
+      while (keeperAimLog.length > 48) keeperAimLog.shift();
+      let sample = 0.5;
+      const wantT = clock - CFG.keeperLag;
+      for (let i = 0; i < keeperAimLog.length; i++) {
+        if (keeperAimLog[i].t <= wantT) sample = keeperAimLog[i].x;
+        else break;
+      }
+      // §6.6 玩家领先两球：预判误差收小；玩家落后两球：朱里偏一侧，露出远角
+      const targetX = D.clamp(
+        sample + keeperErrDir * keeperErrNow() + coverBiasNow(who),
+        CFG.goalX[0] + 0.02, CFG.goalX[1] - 0.02);
+      stepToward(who, targetX, 1 - CFG.keeperLine, CFG.jurieSpeed, dt);
+      a.face = "down";
+      a.dir = "down";
+    }
+
+    /** 防守时两个人的分工：一个按 pressSpot 上抢，一个按 coverSpot / 守门。 */
+    function defendStep(who, dt) {
+      if (keeperOn && roles.cover === who) { updateKeeperAI(who, dt); return; }
+      if (roles.press === who) {
+        const t = pressSpot();
+        stepToward(who, t.x, t.d, who === "yuno" ? CFG.yunoSpeed : CFG.jurieSpeed, dt);
+        if (ball.owner === "me") aiTrySteal(who);
+        return;
+      }
+      const c = coverSpot(who);
+      // 守线的人慢一点：站位本身就是封堵，不去追人
+      stepToward(who, c.x, c.d, CFG.jurieSpeed, dt);
     }
 
     function updateYuno(dt) {
@@ -802,18 +1280,16 @@
         return;
       }
 
-      if (ball.owner === "me") {
-        stepToward("yuno", A.me.x, A.me.d, CFG.yunoSpeed, dt);
-        aiTrySteal("yuno");
-        return;
-      }
       if (ball.owner === "jurie") {
+        // 朱里持球时由乃去接应（这条不动，做球路线还靠它）
         stepToward("yuno", D.clamp(A.jurie.x, 0.35, 0.65),
           Math.max(0.12, A.jurie.d - 0.25), CFG.yunoSpeed * 0.85, dt);
         return;
       }
-      if (ball.mode === "loose") {
-        stepToward("yuno", ball.x, ball.d, CFG.yunoSpeed * 0.9, dt);
+      // 防守（玩家持球 / 球在飞 / 散球）：按 roles 分工，近者上抢、远者守线
+      if (ball.owner === "me" || ball.mode === "shot" || ball.mode === "pass" ||
+          ball.mode === "loose") {
+        defendStep("yuno", dt);
         return;
       }
       a.moving = false;
@@ -839,18 +1315,15 @@
         return;
       }
 
-      if (ball.owner === "me") {
-        stepToward("jurie", A.me.x, A.me.d, CFG.jurieSpeed, dt);
-        aiTrySteal("jurie");
-        return;
-      }
       if (ball.owner === "yuno") {
         stepToward("jurie", D.clamp(A.yuno.x + 0.08, 0.30, 0.70),
           Math.max(0.10, A.yuno.d - 0.16), CFG.jurieSpeed, dt);
         return;
       }
-      if (ball.mode === "loose") {
-        stepToward("jurie", ball.x, ball.d, CFG.jurieSpeed * 0.9, dt);
+      // 防守（玩家持球 / 球在飞 / 散球）：按 roles 分工
+      if (ball.owner === "me" || ball.mode === "shot" || ball.mode === "pass" ||
+          ball.mode === "loose") {
+        defendStep("jurie", dt);
         return;
       }
       a.moving = false;
@@ -864,7 +1337,10 @@
       tackleCd = Math.max(0, tackleCd - dt);
       yunoTackleCd = Math.max(0, yunoTackleCd - dt);
       jurieTackleCd = Math.max(0, jurieTackleCd - dt);
-      if (hudPulse > 0) {
+      dashCd = Math.max(0, dashCd - dt);
+      dashT = Math.max(0, dashT - dt);
+      slipCd = Math.max(0, slipCd - dt);
+      if (hudPulse > 0 && !simMode) {
         hudPulse -= dt;
         if (hudPulse <= 0) el.hud.classList.remove("pulse");
       }
@@ -877,6 +1353,7 @@
             state = "rest";
             finish(scoreMe > scoreThem);
           } else {
+            // §6.4 进球后由失球方开球：谁丢的球，谁就站到球前面
             kickoff(goalSide === "me" ? "yuno" : "me");
             state = "play";
           }
@@ -886,20 +1363,25 @@
         return;
       }
 
-      if (state !== "play" || frozen || D.dialogOpen()) {
+      if (state !== "play" || frozen || (!simMode && D.dialogOpen())) {
         if (stumbleT > 0) stumbleT = Math.max(0, stumbleT - dt);
         return;
       }
 
       if (duel) {
         updateDuel(dt);
-        syncBall();
+        updateTouch(dt);
         refreshScreen();
         syncHud();
         return;
       }
 
       if (stumbleT > 0) stumbleT = Math.max(0, stumbleT - dt);
+
+      // §6.3 Shift 拨球：只在按下的那一帧触发，按住不重复
+      const sh = shiftHeld();
+      if (sh && !shiftLatch) tryDash();
+      shiftLatch = sh;
 
       // 玩家的蓄力先处理：这一帧松手就立刻出脚
       const h = spaceHeld();
@@ -915,19 +1397,23 @@
           aimZ = CFG.aimZ0;
         }
         if (charging) {
-          chargeT += dt;
+          // §6.5 第二把锁：被贴身压迫时蓄力速度 ×0.7
+          const pressed = defenderInFront();
+          chargeT += dt * (pressed ? CFG.pressureChargeMul : 1);
           power = Math.min(1, chargeT / CFG.chargeTime);
-          aimAng += D.axisX() * CFG.aimRateA * dt;
+          aimAng += inputX() * CFG.aimRateA * dt;
           aimX = aimXFor(aimAng);
           aimAng = aimAngFor(aimX);   // 顶到门柱外侧时把角度收回
-          aimZ = D.clamp(aimZ + D.axisY() * CFG.aimRateZ * dt, 0.04, 0.88);
+          aimZ = D.clamp(aimZ + inputY() * CFG.aimRateZ * dt, 0.04, 0.88);
         }
         if (charging && !h) {
           const p = power;
+          const pressed = defenderInFront();
           charging = false;
           chargeT = 0;
           power = 0.3;
           if (p < CFG.shotMin) weakKick("me");
+          else if (pressed && p < CFG.weakPower) weakKick("me");   // 被逼住的一脚，踢呲
           else shoot("me", aimX, aimZ, p);
         }
       } else {
@@ -935,13 +1421,17 @@
         chargeT = 0;
       }
 
+      const prevX = A.me.x, prevD = A.me.d;
       movePlayer(dt);
+      meVel.x = dt > 0 ? (A.me.x - prevX) / dt : 0;
+      meVel.d = dt > 0 ? (A.me.d - prevD) / dt : 0;
+      updateRoles(dt);
       updateYuno(dt);
       updateJurie(dt);
       updateAiSteal(dt);
 
       if (ball.owner && ball.mode === "held") {
-        syncBall();
+        updateTouch(dt);
         ball.spin += dt * 4;
       } else if (ball.mode === "shot" && shot) {
         updateShot(dt);
@@ -999,6 +1489,8 @@
     // ---------------------------------------------------------------- 界面
 
     function syncHud() {
+      // 自检的固定步进不碰 DOM（20 个种子要在同一个页面上秒级跑完）
+      if (simMode) return;
       const key = scoreMe + "_" + scoreThem;
       if (key !== boardKey && el.board) {
         boardKey = key;
@@ -1022,7 +1514,7 @@
       } else if (aiSteal) {
         t = (aiSteal.who === "yuno" ? "由乃" : "朱里") + "伸脚了 · 跑开或把球踢出去";
       } else if (ball.owner === "me") {
-        t = "WASD 带球　按住空格蓄力射门";
+        t = "WASD 带球　Shift 拨球　按住空格蓄力射门";
       } else if (ball.owner) {
         t = "靠近持球的人，按 E 抢断";
       } else if (ball.mode === "loose") {
@@ -1283,23 +1775,11 @@
     }
 
     function drawBall(ctx) {
-      const held = ball.owner ? A[ball.owner] : null;
-      let px, py, sc, z;
-      if (held) {
-        sc = held.scale;
-        const face = held.face;
-        const off = 5 * sc;
-        const ox = face === "left" ? -off : face === "right" ? off : 0;
-        const oy = face === "up" ? -off * 0.6 : face === "down" ? off * 0.6 : 0;
-        px = held.sx + ox;
-        py = held.sy + oy;
-        z = 0.06;
-      } else {
-        sc = scaleAt(ball.d);
-        px = ball.sx;
-        py = ball.sy;
-        z = ball.z;
-      }
+      // §6.3 球不再画在固定脚边：直接按球的真实位置画，触球滞后和趟球都看得见
+      const sc = scaleAt(ball.d);
+      const px = ball.sx;
+      const py = ball.sy;
+      const z = ball.z;
 
       // 影子永远留在地上
       ctx.save();
@@ -1310,7 +1790,7 @@
       ctx.fill();
       ctx.restore();
 
-      const drawY = py - liftAt(z, held ? held.d : ball.d);
+      const drawY = py - liftAt(z, ball.d);
       const size = 15 * sc;
       if (D.img.ballSheet) {
         const f = Math.floor(ball.spin) % 4;
@@ -1568,11 +2048,42 @@
       ctx.restore();
     }
 
+    /** §6.5 蓄力时把散布画成判定门前的半透明扇形：
+     *  力度越大、离门越远、身边有人，扇面越宽——风险必须看得见，不做无预告的打偏。 */
+    function drawSpreadFan(ctx) {
+      if (!charging || !(spreadScale > 0)) return;
+      const sigma = shotSpread(power);
+      if (!(sigma > 0)) return;
+      const half = sigma * widthAt(1);          // 门线处的横向半宽（px）
+      const px = sxAt(aimX, 1);
+      const py = syAt(1) - liftAt(aimZ, 1);
+      const me = A.me;
+      ctx.save();
+      ctx.globalAlpha = 0.13;
+      ctx.fillStyle = "#ffd497";
+      ctx.beginPath();
+      ctx.moveTo(me.sx, me.sy - 6);
+      ctx.lineTo(px - half, py);
+      ctx.lineTo(px + half, py);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 0.38;
+      ctx.strokeStyle = "#ffd497";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(px - half, py);
+      ctx.lineTo(px + half, py);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     function draw(ctx) {
       drawGround(ctx);
       drawGoal(ctx, 1);
       drawGoal(ctx, 0);
       drawAimPath(ctx);
+      drawSpreadFan(ctx);
 
       // 远的先画，近的后画：俯视场里近处的人要压住远处的人。
       // 玩家永远最后画——1 对 2 时两个人会贴到身上，按纵深排会把玩家整个人盖住。
@@ -1609,9 +2120,143 @@
       drawBubbles(ctx);
     }
 
+    // ---------------------------------------------------------------- 自检入口
+    // 无渲染、固定步进、按种子重跑：只给 act5/tools/check.cjs 用。
+    // 每次开一个独立实例，正在正常对战的 current 实例不受影响；
+    // 正常游玩仍然走 shell 的 rAF → update()/draw()。
+
+    function simResetMatch(seed) {
+      rnd = makeRnd(seed >>> 0);
+      keeperErrDir = rnd() * 2 - 1;
+      state = "play";
+      frozen = false;
+      clock = 0;
+      scoreMe = 0;
+      scoreThem = 0;
+      goalPause = 0;
+      goalFxT = 0;
+      goalSide = null;
+      lastGoalSide = null;
+      shot = null;
+      pass = null;
+      windup = null;
+      feintT = 0;
+      feintTimer = 0;
+      yunoFeinted = false;
+      stumbleT = 0;
+      duel = null;
+      yunoStun = 0;
+      jurieStun = 0;
+      tackleCd = 0;
+      yunoTackleCd = 0;
+      jurieTackleCd = 0;
+      yunoHold = 0;
+      yunoPassCd = 0;
+      jurieActionCd = 0;
+      charging = false;
+      armed = true;
+      chargeT = 0;
+      power = 0.3;
+      aimAng = 0;
+      aimX = 0.5;
+      aimZ = CFG.aimZ0;
+      aiSteal = null;
+      trail = [];
+      bubbles = [];
+      calls = 0;
+      hudPulse = 0;
+      dashT = 0;
+      dashCd = 0;
+      shiftLatch = false;
+      slipCd = 0;
+      ballOffFoot = 0;
+      turnLog = [];
+      lastShot = null;
+      roles = { press: "yuno", cover: "jurie", want: "yuno", timer: 0 };
+      keeperOn = false;
+      keeperLunge = null;
+      keeperAimLog = [];
+      meVel = { x: 0, d: 0 };
+      stats = {
+        tackles: 0, stumbles: 0, steals: 0, shots: 0,
+        goalsFor: 0, goalsAgainst: 0, passes: 0,
+        feints: 0, airKicks: 0, saves: 0, duelFails: 0, posts: 0, turnSlips: 0, aiWindups: 0
+      };
+    }
+
+    function simBegin(seed, opts) {
+      simMode = true;
+      const o = opts || {};
+      spreadScale = o.spreadScale == null ? 1 : o.spreadScale;
+      simResetMatch(seed == null ? 20261108 : seed);
+      kickoff(o.kick === "yuno" ? "yuno" : "me");
+      return true;
+    }
+
+    function simStep(dt, keys) {
+      simKeys = keys || {};
+      update(dt == null ? 1 / 60 : dt);
+    }
+
+    function simEnd() {
+      simMode = false;
+      simKeys = null;
+      spreadScale = 1;
+    }
+
+    function simLanding(x, z, powerLevel) {
+      const l = spreadLanding(x, z, powerLevel);
+      return { x: l.x, z: l.z };
+    }
+
+    function simSigma(powerLevel, meD, pressured) {
+      return spreadSigma(powerLevel, meD == null ? A.me.d : meD, !!pressured);
+    }
+
+    /** 自检专用：改比分看 §6.6 的隐性参数（正常游玩不经过）。 */
+    function simSetScore(me, them) {
+      scoreMe = me | 0;
+      scoreThem = them | 0;
+    }
+
+    function simProbeArgs() {
+      return {
+        pressLead: pressLeadNow(),
+        keeperErr: keeperErrNow(),
+        coverBias: coverBiasNow("jurie"),
+        keeperLine: CFG.keeperLine,
+        keeperReach: CFG.keeperReach,
+        goalsToWin: CFG.goalsToWin
+      };
+    }
+
+    function simSnap() {
+      const pos = function (k) {
+        const a = A[k];
+        return { x: a.x, d: a.d, sx: a.sx, sy: a.sy, face: a.face, moving: a.moving };
+      };
+      return {
+        state: state, clock: clock, holder: ball.owner, mode: ball.mode,
+        me: pos("me"), yuno: pos("yuno"), jurie: pos("jurie"),
+        ball: { x: ball.x, d: ball.d, z: ball.z, sx: ball.sx, sy: ball.sy },
+        charging: charging, chargeT: chargeT, power: power,
+        aimX: aimX, aimZ: aimZ, aimAng: aimAng,
+        keeper: keeperInfo(),
+        roles: { press: roles.press, cover: roles.cover, want: roles.want },
+        ballOffFoot: ballOffFoot,
+        dash: { t: dashT, cd: dashCd },
+        lastShot: lastShot ? Object.assign({}, lastShot) : null,
+        lastGoalSide: lastGoalSide,
+        scoreMe: scoreMe, scoreThem: scoreThem,
+        stats: Object.assign({}, stats)
+      };
+    }
+
     // ---------------------------------------------------------------- 收尾
 
     async function finish(win) {
+      // 自检的固定步进不写存档、不弹对白；正常对战这条分支不会进
+      if (simMode) { state = "done"; return; }
       state = "rest";
       D.reactHint(false);
       D.clearReact();
@@ -1784,6 +2429,21 @@
       get calls() { return calls; },
       get stats() { return stats; },
       get config() { return CFG; },
+      get roles() { return { press: roles.press, cover: roles.cover, want: roles.want }; },
+      get keeper() { return keeperInfo(); },
+      get ballOffFoot() { return ballOffFoot; },
+      get dash() { return { t: dashT, cd: dashCd }; },
+      get lastShot() { return lastShot ? Object.assign({}, lastShot) : null; },
+      // 自检专用：确定性固定步进（只有 act5/tools/check.cjs 会调，正常游玩不经过）
+      __simBegin: simBegin,
+      __simStep: simStep,
+      __simSnap: simSnap,
+      __simEnd: simEnd,
+      __simLanding: simLanding,
+      __simSetSpread: function (v) { spreadScale = v == null ? 1 : v; },
+      __simSigma: simSigma,
+      __simScore: simSetScore,
+      __simProbe: simProbeArgs,
       get winner() {
         return state === "rest" || state === "done"
           ? (scoreMe > scoreThem ? "me" : "them")
@@ -1791,4 +2451,207 @@
       }
     };
   };
+  // ---------------------------------------------------------------- 自检入口
+  // 只创建独立实例、只做无渲染固定步进：不画、不读 DOM、不弹对白、不碰存档。
+  // 正常游玩仍是 D.games.ball(host) 交给 shell 的 rAF 去 update()/draw()。
+  const SIM_HOST = { setBackground: function () {}, setChapter: function () {}, done: function () {} };
+  const SIM_DT = 1 / 60;
+
+  function makeSim(seed, opts) {
+    const g = D.games.ball(SIM_HOST);
+    g.__simBegin(seed, opts);
+    return g;
+  }
+
+  /** 「开球后直线带球 + 满力射门」的一条龙路线：AI 由种子驱动，玩家侧用脚本输入。
+   *  返回这一脚的结果（goal / save / block / post / miss / high / lost / timeout）。 */
+  function simRoute(seed) {
+    const g = makeSim(seed, { spreadScale: 1, kick: "me" });
+    const out = {
+      seed: seed, result: "timeout", goal: false, steps: 0,
+      keeperSeen: false, keeperAt: null, landing: null, aim: null,
+      power: null, shotAtD: null, meD: 0, stats: null
+    };
+    let t = 0;
+    let phase = "dribble";
+    while (t < 8) {
+      const s = g.__simSnap();
+      if (s.keeper && s.keeper.active) {
+        out.keeperSeen = true;
+        if (out.keeperAt == null) out.keeperAt = { d: s.me.d, who: s.keeper.who };
+      }
+      if (s.state === "goalPause") {
+        out.result = s.lastGoalSide === "me" ? "goal" : "conceded";
+        out.meD = s.me.d;
+        break;
+      }
+      if (s.state !== "play") { out.result = "state:" + s.state; break; }
+      if (s.lastShot && s.lastShot.from === "me") {
+        out.landing = { x: s.lastShot.x1, z: s.lastShot.z1 };
+        out.aim = s.lastShot.aim ? { x: s.lastShot.aim.x, z: s.lastShot.aim.z } : null;
+        out.power = s.lastShot.power;
+        if (out.shotAtD == null) out.shotAtD = s.lastShot.d0;
+      }
+      if (phase === "flight") {
+        if (s.lastShot && s.lastShot.result !== "flying") {
+          out.result = s.lastShot.result;
+          break;
+        }
+        g.__simStep(SIM_DT, {});
+      } else if (s.holder !== "me") {
+        out.result = "lost";
+        break;
+      } else if (phase === "dribble") {
+        if (s.me.d >= 0.82) {
+          phase = "charge";
+          g.__simStep(SIM_DT, {});
+        } else {
+          g.__simStep(SIM_DT, { up: true });
+        }
+      } else if (phase === "charge") {
+        if (!s.charging) g.__simStep(SIM_DT, { space: true });
+        else if (s.chargeT >= CFG.chargeTime - 1e-9) {
+          g.__simStep(SIM_DT, { space: false });
+          phase = "flight";
+        } else g.__simStep(SIM_DT, { space: true });
+      } else {
+        g.__simStep(SIM_DT, {});
+      }
+      t += SIM_DT;
+      out.steps++;
+    }
+    const end = g.__simSnap();
+    out.meD = end.me.d;
+    out.stats = end.stats;
+    out.goal = out.result === "goal";
+    g.__simEnd();
+    return out;
+  }
+
+  /** 守线 / 守门状态机：带球往远门走，过中线进入射程（d ≥ 0.62）时必须进 keeper 态。 */
+  function simKeeper(seed) {
+    const g = makeSim(seed, { spreadScale: 1, kick: "me" });
+    const out = {
+      seed: seed, reached: false, keeperBefore: false, keeperActive: false,
+      atD: 0, keeper: null, roles: null, holder: "me", steps: 0
+    };
+    let t = 0;
+    while (t < 6) {
+      const s = g.__simSnap();
+      if (s.me.d < 0.45) {
+        out.keeperBefore = !!(s.keeper && s.keeper.active);
+        out.roles = s.roles;
+      }
+      if (s.holder !== "me") { out.holder = s.holder; break; }
+      if (s.me.d >= CFG.keeperTriggerD) {
+        out.reached = true;
+        out.atD = s.me.d;
+        out.keeperActive = !!(s.keeper && s.keeper.active);
+        out.keeper = s.keeper ? { who: s.keeper.who, x: s.keeper.x, d: s.keeper.d } : null;
+        out.roles = s.roles;
+        break;
+      }
+      g.__simStep(SIM_DT, { up: true });
+      t += SIM_DT;
+      out.steps++;
+    }
+    g.__simEnd();
+    return out;
+  }
+
+  /** 6.3 触球系统：球不再粘脚——站住时停在朝向 0.05 的前方；跑动有滞后；
+   *  急转 >100°/0.2s 会多滑 0.02（stats.turnSlips 记一笔，方便断言）。 */
+  function simTouch(seed) {
+    const g = makeSim(seed, { spreadScale: 1, kick: "me" });
+    const out = { seed: seed, offFootStill: 0, offFootMoving: 0, ahead: false, sticky: true, turnSlips: 0 };
+    // 开球保护还在的这 0.3 秒里站住：球从脚边滚到朝向 0.05 的前方
+    for (let i = 0; i < 18; i++) g.__simStep(SIM_DT, {});
+    const s0 = g.__simSnap();
+    out.offFootStill = s0.ballOffFoot;
+    out.stillAhead = s0.holder === "me" && s0.ball.d > s0.me.d;
+    // 先往远处跑一小段（攒出方向），再 180° 掉头：0.2 秒内转向超过 100° 要外滑 0.02
+    for (let i = 0; i < 20; i++) {
+      g.__simStep(SIM_DT, { up: true });
+      const s = g.__simSnap();
+      if (s.holder !== "me") break;
+      out.offFootMoving = Math.max(out.offFootMoving, s.ballOffFoot);
+      if (s.ball.d > s.me.d) out.ahead = true;
+      if (Math.abs(s.ball.d - s.me.d) > 0.004 || Math.abs(s.ball.x - s.me.x) > 0.004) {
+        out.sticky = false;
+      }
+    }
+    for (let i = 0; i < 14; i++) g.__simStep(SIM_DT, { down: true });
+    out.turnSlips = g.__simSnap().stats.turnSlips;
+    g.__simEnd();
+    return out;
+  }
+
+  /** 6.3 Shift 拨球：球向前拨出 0.16 纵深、自己进入 0.45s 加速与 2.5s 冷却。 */
+  function simDash(seed) {
+    const g = makeSim(seed, { spreadScale: 1, kick: "me" });
+    const out = { seed: seed, loose: false, dashT: 0, dashCd: 0, depth: 0, recovered: false };
+    for (let i = 0; i < 8; i++) g.__simStep(SIM_DT, { up: true });
+    const before = g.__simSnap();
+    out.d0 = before.me.d;
+    g.__simStep(SIM_DT, { shift: true });
+    const s1 = g.__simSnap();
+    out.loose = !s1.holder && s1.mode === "loose";
+    out.dashT = s1.dash.t;
+    out.dashCd = s1.dash.cd;
+    out.depth = s1.ball.d - s1.me.d;
+    for (let i = 0; i < 90; i++) {
+      g.__simStep(SIM_DT, {});
+      if (g.__simSnap().holder === "me") { out.recovered = true; break; }
+    }
+    g.__simEnd();
+    return out;
+  }
+
+  /** 6.6 比分起伏：给自检改一个比分看隐性参数（正常游玩永远从 0:0 开始）。 */
+  function simScore(seed, me, them) {
+    const g = makeSim(seed, { spreadScale: 1, kick: "me" });
+    g.__simScore(me, them);
+    const p = g.__simProbe();
+    g.__simEnd();
+    return p;
+  }
+
+  /** 6.5 σ=0 时出手落点必须严格等于瞄准点；打开散布时才允许偏移。 */
+  function simSpread(seed) {
+    const g = makeSim(seed, { spreadScale: 0, kick: "me" });
+    const zero = g.__simLanding(0.42, 0.31, 1.0);
+    const zero2 = g.__simLanding(0.638, 0.55, 0.62);
+    const sigma = {
+      zero: g.__simSigma(0, 0.8, false),
+      low: g.__simSigma(0.3, 0.8, false),
+      high: g.__simSigma(1.0, 0.8, false),
+      far: g.__simSigma(0.3, 0.2, false),
+      pressed: g.__simSigma(0.3, 0.8, true)
+    };
+    g.__simSetSpread(1);
+    let moved = false;
+    let on = null;
+    for (let i = 0; i < 6; i++) {
+      on = g.__simLanding(0.5, 0.40, 1.0);
+      if (Math.abs(on.x - 0.5) > 1e-9) { moved = true; break; }
+    }
+    g.__simEnd();
+    return { seed: seed, zero: zero, zero2: zero2, sigma: sigma, on: on, moved: moved };
+  }
+
+  window.__ball = {
+    version: 2,
+    testRoute: simRoute,
+    testKeeper: simKeeper,
+    testTouch: simTouch,
+    testDash: simDash,
+    testSpread: simSpread,
+    testScore: simScore,
+    testSeeds: function (n, fn) {
+      const out = [];
+      for (let i = 1; i <= (n || 20); i++) out.push(fn(i));
+      return out;
+    }
+  };
+
 })(window);
