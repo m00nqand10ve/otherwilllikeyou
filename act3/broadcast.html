@@ -32,11 +32,32 @@
         </div>
       </div>
 
+      <!-- 试音之后、正式录之前选档位。两档共用同一次校准出来的 offsetMs。 -->
+      <div id="diff">
+        <h2>今晚用什么档位</h2>
+        <p id="diffNote">标准档：判定宽一点，噪音只影响演出。</p>
+        <div class="row">
+          <button class="opt" data-d="演播">演播 · 标准</button>
+          <button class="opt" data-d="电台">电台 · 严格</button>
+        </div>
+        <p class="note">F / 1 选演播　J / 2 选电台　Enter 用上次的档</p>
+      </div>
+
       <div id="card">
         <h2>第三幕 · 晚间广播</h2>
         <div id="rank">A</div>
         <p id="stat"></p>
+        <p id="meta"></p>
         <p class="score">得分 <b id="score2">0</b></p>
+        <div id="segWrap">
+          <table id="segTable">
+            <thead>
+              <tr><th>段落</th><th>准确率</th><th>接力</th><th>最高连击</th></tr>
+            </thead>
+            <tbody id="segRows"></tbody>
+          </table>
+        </div>
+        <p id="syncLine"></p>
         <div class="row">
           <button id="again">再录一次</button>
           <button id="out">一起走出广播室</button>
