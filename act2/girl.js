@@ -32,7 +32,19 @@
     fillGate: 0.006,            // 玩家在主图区画够这么多，她才开始帮忙填
     fillW: 3,                   // 每一格画多大，3px 才能盖住 2px 的格子不留缝
     fillColor: "#d9d2c2",       // 暖白偏灰：像用粉笔侧面擦出来的一片，不是刷漆
-    fillAlpha: 0.3              // 相邻格子会叠一次，叠出来约 0.5，比她画的线暗一档
+    fillAlpha: 0.3,             // 相邻格子会叠一次，叠出来约 0.5，比她画的线暗一档
+
+    // 接力描线（§1.3）：她在主图空白处起一小笔，末端亮 6 秒等玩家接。
+    // 没接上就自然淡掉，无惩罚；接上了她说 LINES.relay 里的那句。
+    // 一次接力仍然只算一次辅助（计入全局 6 次上限），一次撤销整笔撤掉。
+    relay: {
+      minLen: 30,               // 起笔长度下限（px，板面坐标）
+      maxLen: 60,               // 上限
+      life: 6.0,                // 端点高亮存活时间（秒）
+      connect: 12,              // 玩家笔画起点落在这个半径内算接上
+      tries: 8,                 // 找空位的随机采样次数
+      color: "#f6db9e"          // 暖黄色：和玩家的白线分得开，又不出戏
+    }
   };
 
   // 她会往装饰区添的图案。都挑 16×16 那批（放大一倍是 32px），
@@ -45,11 +57,20 @@
   function clamp(v, a, b) { return Math.min(b, Math.max(a, v)); }
   function ease(t) { return 1 - Math.pow(1 - t, 3); }
 
+  // 自己写的伪随机（和 act5/ball.js 的 makeRnd 同式）：接力起笔的位置/角度
+  // 可复现，自检不会时灵时不灵。
+  function makeRnd(seed) {
+    let s = seed >>> 0;
+    return function () { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
+  }
+
   function create(board, opts) {
     const say = (opts && opts.say) || function () {};
     const onChalk = (opts && opts.onChalk) || function () {};
     const onAssist = (opts && opts.onAssist) || function () {};
+    const onRelay = (opts && opts.onRelay) || function () {};
     const pick = global.ACT2.Lines.pick;
+    const relayRnd = makeRnd(0x9e51);
 
     const s = {
       state: STATE.IDLE,
@@ -62,13 +83,17 @@
       streak: 0,            // 玩家连续用同一支粉笔的次数
       lastColor: -1,
       saidFirst: false,
-      kind: null,           // frame / deco / tidy / dots
+      kind: null,           // frame / deco / tidy / dots / fill / relay
       queue: [],
       qi: 0,
       pos: 0,
       drawn: 0,
       deco: null,           // 正在「画」的那个图案 uid
       tidy: null,           // 正在挪的那个图案 { uid, from, to }
+      relay: null,          // 正在等玩家接的接力笔 { x, y, t, life, color }
+      relayPlan: null,      // 刚画完的接力计划（finishAssist 里转成 relay）
+      pendingChalk: null,   // 递粉笔二选一：{ a, b } 两个颜色下标
+      chalkTask: false,     // 当前这次 deco 辅助是「用她手里那支」补的
       dur: 0,
       elapsed: 0,
       active: false,
@@ -142,6 +167,76 @@
       cands.sort((a, b) => b.near - a.near);
       // 从最空的三个里随机挑，不然每次都在同一个地方
       return pickOne(cands.slice(0, 3));
+    }
+
+    /** 这个主题推荐她添哪些图案（16×16 那批；48px 角花太大，会压到底边框上）。 */
+    function themeDecorPatterns() {
+      const info = board.themeInfo ? board.themeInfo() : null;
+      const pref = (info && info.patterns ? info.patterns : []).filter((pid) => {
+        const p = board.PAT.BY_ID[pid];
+        return p && p.size <= 16;
+      });
+      return pref.length >= 3 ? pref : DECO_PATTERNS;
+    }
+
+    /** 她添图案时用的颜色：主题主色 + 原来的四色。 */
+    function themeDecoColors() {
+      const info = board.themeInfo ? board.themeInfo() : null;
+      const main = info && board.COLORS[info.colorIndex] ? board.COLORS[info.colorIndex].hex : null;
+      return main ? [main].concat(DECO_COLORS) : DECO_COLORS.slice();
+    }
+
+    // ---- 接力描线（§1.3）
+
+    function inMain(x, y) {
+      const r = board.REGION.main;
+      const pad = 6;
+      return x >= r.x + pad && x <= r.x + r.w - pad && y >= r.y + pad && y <= r.y + r.h - pad;
+    }
+    function clearAt(x, y) {
+      const box = { x: Math.round(x) - 3, y: Math.round(y) - 3, w: 6, h: 6 };
+      return !board.assist.hasInk(box) && board.assist.playerDensity(box) <= CFG.clearance;
+    }
+
+    /**
+     * 在主图区找一小截空白起笔：长度 30–60px，两端和整条线都落在空白处。
+     * 找不到就返回 null（她会去做别的事，不硬画）。
+     */
+    function relayTask() {
+      const band = board.REGION.main;
+      for (let i = 0; i < CFG.relay.tries; i++) {
+        const len = CFG.relay.minLen + relayRnd() * (CFG.relay.maxLen - CFG.relay.minLen);
+        const ang = relayRnd() * Math.PI * 2;
+        const x0 = band.x + 14 + relayRnd() * (band.w - 28);
+        const y0 = band.y + 12 + relayRnd() * (band.h - 24);
+        const x1 = x0 + Math.cos(ang) * len;
+        const y1 = y0 + Math.sin(ang) * len;
+        if (!inMain(x0, y0) || !inMain(x1, y1)) continue;
+        let ok = true;
+        for (let t = 0; t <= 6; t++) {
+          const x = x0 + (x1 - x0) * t / 6, y = y0 + (y1 - y0) * t / 6;
+          if (!clearAt(x, y)) { ok = false; break; }
+        }
+        if (!ok) continue;
+        return {
+          kind: "relay", color: CFG.relay.color,
+          from: { x: x0, y: y0 }, to: { x: x1, y: y1 }, len,
+          ops: [[[x0, y0], [x1, y1]]]
+        };
+      }
+      return null;
+    }
+
+    /** 二选一之后：她用没被选的那支补一个装饰图案。 */
+    function chalkDecoTask(color) {
+      for (const pid of themeDecorPatterns()) {
+        const pat = board.PAT.BY_ID[pid];
+        if (!pat) continue;
+        const half = (pat.size * (pat.scale || 2)) / 2;
+        const spot = decoSpot(half);
+        if (spot) return { kind: "deco", pid, x: spot.x, y: spot.y, color, chalk: true };
+      }
+      return null;
     }
 
     /**
@@ -249,15 +344,22 @@
       }
 
       if (r.deco.stamps < board.NEED.decoStamps) {
-        const pid = pickOne(DECO_PATTERNS);
+        const pid = pickOne(themeDecorPatterns());
         const pat = board.PAT.BY_ID[pid];
         if (pat) {
           const half = (pat.size * (pat.scale || 2)) / 2;
           const spot = decoSpot(half);
           if (spot) {
-            return { kind: "deco", pid, x: spot.x, y: spot.y, color: pickOne(DECO_COLORS) };
+            return { kind: "deco", pid, x: spot.x, y: spot.y, color: pickOne(themeDecoColors()) };
           }
         }
+      }
+
+      // 接力描线排在补图案之后：该补的都补了，才轮到她「起个头让玩家接」。
+      // 只在主图还没达标时做——空白是她挑地方的前提。
+      if (!r.main.done && !s.relay) {
+        const relay = relayTask();
+        if (relay) return relay;
       }
 
       if (r.main.done) {
@@ -293,7 +395,19 @@
       s.elapsed = 0;
       s.active = true;
       s.kind = task.kind;
+      s.relayPlan = null;
+      s.chalkTask = !!task.chalk;
       board.assist.snapshot();
+
+      // 接力：把那一小截画上去，画完把末端高亮留给玩家（finishAssist 里接手）
+      if (task.kind === "relay") {
+        s.relayPlan = task;
+        for (const op of task.ops) {
+          const dense = densify(op, task.color || CFG.relay.color);
+          for (const p of dense) s.queue.push(p);
+        }
+        return;
+      }
 
       // 放一个图案：先落在 0 透明度，再从上往下一格格「画」出来
       if (task.kind === "deco") {
@@ -317,7 +431,7 @@
         return;
       }
 
-      const color = task.kind === "frame" ? "#f4ecdd" : "#f6db9e";
+      const color = task.color || (task.kind === "frame" ? "#f4ecdd" : "#f6db9e");
       for (const op of task.ops) {
         const dense = densify(op, color);
         for (const p of dense) s.queue.push(p);
@@ -383,23 +497,39 @@
         const d = board.assist.decos().find((q) => q.uid === s.tidy.uid);
         if (d) d.fixed = true;
       }
+      // 接力笔落地：把末端交给玩家，6 秒内起点落在 12px 内就算接上
+      if (s.kind === "relay" && s.relayPlan) {
+        const plan = s.relayPlan;
+        const to = plan.to;
+        s.relay = { x: to.x, y: to.y, t: 0, life: CFG.relay.life, color: plan.color };
+        s.relayPlan = null;
+        board.setRelayHint({ x: to.x, y: to.y, alpha: 1 });
+        onRelay({ x: to.x, y: to.y, from: { ...plan.from }, len: Math.round(plan.len || 0) });
+      }
       board.assist.settle();
       s.assists++;
       s.state = STATE.COOLDOWN;
       s.t = 0;
       s.cooldown = rnd(CFG.cooldown[0], CFG.cooldown[1]);
       if (s.kind === "frame") say(pick("frame"));
-      else if (s.kind === "deco") say(pick("deco"));
+      else if (s.kind === "deco") { if (!s.chalkTask) say(pick("deco")); }
       else if (s.kind === "tidy") say(pick("tidy"));
       else if (s.kind === "dots") say(pick("dots"));
       else if (s.kind === "fill") say(pick("fill"));
+      // relay 不在这里说话：接上时才有 LINES.relay 那句（没接上就安静地淡掉）
+      s.chalkTask = false;
       onAssist(s.kind);
     }
 
     // ------------------------------------------------------------ 外部事件
 
-    /** 玩家落笔（每次 pointerdown 一次）。 */
-    function noteStroke(colorIndex) {
+    /** 玩家落笔（每次 pointerdown 一次）。point 是这次落笔的起点（板面坐标）。 */
+    function noteStroke(colorIndex, point) {
+      // 接力（§1.3）：玩家笔画起点落在她端点 12px 内 → 接上
+      if (s.relay && point) {
+        const d = Math.hypot(point.x - s.relay.x, point.y - s.relay.y);
+        if (d <= CFG.relay.connect) connectRelay();
+      }
       s.idle = 0;
       if (s.state === STATE.IDLE) {
         s.state = STATE.WATCH;
@@ -415,13 +545,42 @@
         if (s.streak >= 3 && s.state !== STATE.ASSIST && s.cooldown <= 0) {
           s.streak = 0;
           s.cooldown = 12;
-          onChalk(colorIndex);
-          say(pick("chalk"));
+          // 二选一（§1.4）：把玩家正用的那支和另一支一起递过去。
+          // 台词与面板由 scene2 管；这里只决定「哪两支」。
+          const n = board.COLORS.length;
+          const a = colorIndex == null ? s.lastColor : colorIndex;
+          const b = (a + 1 + Math.floor(relayRnd() * (n - 1))) % n;
+          s.pendingChalk = { a, b };
+          onChalk({ a, b });
         }
       } else {
         s.streak = 1;
         s.lastColor = colorIndex;
       }
+    }
+
+    /** 玩家接了接力笔：她说一句，并从端点再补一小截，把两笔真的连起来。 */
+    function connectRelay() {
+      const r = s.relay;
+      if (!r) return false;
+      s.relay = null;
+      board.setRelayHint(null);
+      board.assist.line([[r.x, r.y], [r.x + 6, r.y + 3]], { color: r.color, w: 2, alpha: 0.85 });
+      board.assist.settle();
+      say(pick("relay"));
+      return true;
+    }
+
+    /** 玩家选了哪支粉笔（§1.4）：她用没被选的那支去补装饰区。 */
+    function takeChalk(chosen) {
+      const pending = s.pendingChalk;
+      if (!pending) return null;
+      s.pendingChalk = null;
+      const other = chosen === pending.a ? pending.b : pending.a;
+      const color = board.COLORS[other] ? board.COLORS[other].hex : "#f4ecdd";
+      const task = chalkDecoTask(color);
+      if (task) startAssist(task);
+      return { chosen, other, color, did: !!task };
     }
 
     function noteErase() {
@@ -437,6 +596,18 @@
     function update(dt, info) {
       s.t += dt;
       s.cooldown = Math.max(0, s.cooldown - dt);
+
+      // 接力窗口：6 秒后自然淡掉——不失败、不重开，她冷却完照常辅助。
+      if (s.relay) {
+        s.relay.t += dt;
+        const k = 1 - s.relay.t / s.relay.life;
+        if (k <= 0) {
+          s.relay = null;
+          board.setRelayHint(null);
+        } else {
+          board.setRelayHint({ x: s.relay.x, y: s.relay.y, alpha: k });
+        }
+      }
 
       if (s.state === STATE.ASSIST) {
         stepAssist(dt);
@@ -482,8 +653,17 @@
     return {
       STATE, CFG,
       update, noteStroke, noteErase,
+      /** 玩家选完粉笔后调用：她用没被选的那支去补装饰区（§1.4）。 */
+      takeChalk,
+      /** 测试/调试用：当前是不是有一截接力笔在等她接。 */
+      get relay() { return s.relay ? { ...s.relay } : null; },
+      get chalkPending() { return s.pendingChalk ? { ...s.pendingChalk } : null; },
       /** 玩家撤销/重开时把她这一笔也停掉——否则她会在恢复后的画布上接着画。 */
       cancel() {
+        // 接力窗口一起收掉：撤销后她那截笔没了，端点再亮着会指向空白
+        if (s.relay) { s.relay = null; board.setRelayHint(null); }
+        s.relayPlan = null;
+        s.pendingChalk = null;
         if (!s.active) return;
         // 放到一半的图案别留半截：要么画完，要么撤销时跟快照一起没
         if (s.kind === "deco" && s.deco != null) board.assist.reveal(s.deco, 1);
@@ -502,6 +682,11 @@
         s.kind = null;
         s.deco = null;
         s.tidy = null;
+        s.relay = null;
+        s.relayPlan = null;
+        s.pendingChalk = null;
+        s.chalkTask = false;
+        board.setRelayHint(null);
         s.elapsed = 0;
         s.filled.clear();
         s.state = STATE.IDLE;

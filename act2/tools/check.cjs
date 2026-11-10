@@ -6,12 +6,18 @@
  *   1 板面几何   2 四区互不误判   3 她不落在玩家笔迹上   4 一次撤销撤掉她整笔
  *   5 导出含她的笔迹   6 完成镜头用玩家作品   8 file:// 无报错
  *
+ * 设计文档 §1.7 的新断言也在这一份里：
+ *   主题三选一（底稿 / 图案组 / 主色调随主题变）、椅子描顶边（触发 / 出界停笔 /
+ *   画完两句）、接力描线（30–60px、12px 内接上、超时淡出、一次撤销）、
+ *   粉笔二选一（她用没被选的那支补装饰）、结算聚合与手算一致、
+ *   结算评价写档（theme / themeName / evalIds / evals 一一对应）、旧存档无 theme 兜底。
+ *
  * 跑：node act2/tools/check.cjs
  */
 const path = require('path');
 const { chromium } = require(path.resolve(__dirname, '../../game/dust-corridor/node_modules/playwright-core'));
 
-const PAGE = 'file:///D:/%E8%A7%A3%E5%86%B3%E5%86%85%E5%88%86%E6%B3%8C%E5%A4%B1%E8%B0%83/pixel-act1/act2/blackboard.html';
+const PAGE = 'file:///' + path.join(__dirname, '..', 'blackboard.html').replace(/\\/g, '/');
 const OUT = path.resolve(__dirname, 'out');
 
 (async () => {
@@ -54,6 +60,72 @@ const OUT = path.resolve(__dirname, 'out');
     await page.screenshot({ path: path.join(OUT, '00b-push.png') });
   }
   await page.waitForFunction(() => window.__board.state().state === 'board', null, { timeout: 8000 });
+
+  // ---- 1.1 开场定主题（三选一）：选项在对白区；底稿 / 图案组 / 主色调随主题变
+  await page.waitForFunction(() => window.__board.state().themePicking === true, null, { timeout: 5000 });
+  const themeUi = await page.evaluate(() => ({
+    n: document.querySelectorAll('#pick button').length,
+    labels: [...document.querySelectorAll('#pick button')].map((b) => b.textContent),
+    visible: !document.getElementById('pick').hidden,
+    chatPaused: !!window.__board.chat.paused,
+    theme: window.__board.state().theme
+  }));
+  if (!themeUi.visible) fail('开画前没有出现主题三选一（对白区没有选项）');
+  if (themeUi.n !== 3) fail(`主题选项有 ${themeUi.n} 个，应该是 3 个`);
+  if (themeUi.theme !== 'reading') fail(`没有选主题时默认不是读书周（${themeUi.theme}）`);
+  for (const name of ['运动会', '读书周', '毕业季']) {
+    if (!themeUi.labels.includes(name)) fail(`主题选项里没有「${name}」：${themeUi.labels.join('/')}`);
+  }
+  if (!themeUi.chatPaused) fail('选主题的时候字幕轮播还在滚，会把选择题顶掉');
+  // 真实输入路径也要成立：数字键 1 直接选「运动会」
+  await page.keyboard.press('Digit1');
+  await page.waitForTimeout(260);
+  const keyPicked = await page.evaluate(() => ({
+    theme: window.__board.state().theme,
+    picker: !document.getElementById('pick').hidden
+  }));
+  if (keyPicked.theme !== 'sports') fail(`数字键 1 没有选到运动会（${keyPicked.theme}）`);
+  if (keyPicked.picker) fail('用数字键选完主题，选择题还挂着');
+
+  // 三个主题逐个切：底稿构图（画稿指纹 + ghostKey）、图案推荐组、主色调都必须变
+  const themes = {};
+  for (const id of ['sports', 'reading', 'graduation']) {
+    await page.evaluate((id) => window.__board.pickTheme(id), id);
+    // 人像主题的主图画稿是一张异步解码的内嵌 PNG，等它烘好格子表再取指纹
+    await page.waitForFunction(() => (window.__board.board.ghostInk() || []).length > 0, null, { timeout: 5000 });
+    themes[id] = await page.evaluate(() => {
+      const b = window.__board.board;
+      return {
+        id: b.theme(),
+        name: b.themeInfo().name,
+        ghostKey: b.themeInfo().ghostKey,
+        picHash: b.ghostState().picHash,
+        cells: (b.ghostInk() || []).length,
+        patterns: b.themePatterns().map((p) => p.id),
+        colorIndex: b.state.colorIndex,
+        pickerHidden: document.getElementById('pick').hidden,
+        chatOn: !!(window.__board.chat && window.__board.chat.on)
+      };
+    });
+  }
+  const byTheme = (k) => ['sports', 'reading', 'graduation'].map((id) => themes[id][k]);
+  if (new Set(byTheme('ghostKey')).size !== 3) fail('三个主题的底稿构图没有区别（ghostKey 重复）');
+  if (new Set(byTheme('picHash')).size !== 3) fail(`三个主题的主图画稿一样（${JSON.stringify(byTheme('picHash'))}）`);
+  if (new Set(byTheme('colorIndex')).size !== 3) fail(`三个主题的起始粉笔色没变（${JSON.stringify(byTheme('colorIndex'))}）`);
+  if (new Set(byTheme('patterns').map((p) => p.slice(0, 3).join(','))).size !== 3) {
+    fail('三个主题的图案推荐组没有区别');
+  }
+  for (const id of ['sports', 'reading', 'graduation']) {
+    const t = themes[id];
+    if (t.patterns.length < 16) fail(`${t.name} 主题下图案面板只剩 ${t.patterns.length} 个图案`);
+    if (!t.pickerHidden) fail(`${t.name} 选完之后选择题还挂着`);
+    if (!t.chatOn) fail(`${t.name} 选完之后字幕轮播没起来`);
+    if (!(t.cells > 300)) fail(`${t.name} 主题的主图画稿填色格子太少（${t.cells}）`);
+  }
+  // 回到读书周：后面所有旧断言都按这一套跑，保证不是新主题掩盖了回归
+  await page.evaluate(() => window.__board.pickTheme('reading'));
+  await page.waitForTimeout(350);
+  if (await page.evaluate(() => window.__board.state().theme) !== 'reading') fail('主题切不回读书周');
 
   // ---- 1. 几何
   const geo = await page.evaluate(() => {
@@ -233,6 +305,314 @@ const OUT = path.resolve(__dirname, 'out');
     return dup;
   });
   if (draw.length) fail(`12 段字幕里出现了重复：${draw[0].slice(0, 18)}`);
+
+  // ---- 1.4 递粉笔二选一：选一支自用，她用没被选的那支补装饰区
+  // 清板 / 复位 / 触发必须在同一次 evaluate 里同步做完——中间隔一帧，
+  // 她的 AI 会先接一个任务，把「连用同色三次」的状态打断（自检会时灵时不灵）。
+  const chalkOffer = await page.evaluate(() => {
+    const b = window.__board.board;
+    const g = window.__board.girl;
+    b.clearAll();
+    g.reset();
+    g.skipCooldown();
+    // 连用同一支粉笔三次 = 触发递粉笔事件（走真实事件路径，不直接调内部函数）
+    g.noteStroke(0);
+    g.noteStroke(0);
+    g.noteStroke(0);
+    return {
+      pick: window.__board.state().chalkPick,
+      buttons: [...document.querySelectorAll('#pick button')].map((b) => b.dataset.color),
+      line: document.getElementById('subsLine').textContent,
+      pickVisible: !document.getElementById('pick').hidden
+    };
+  });
+  if (!chalkOffer.pick) fail('连用同一支粉笔三次，她没有递粉笔（没有二选一）');
+  else {
+    const { a, b: bIdx } = chalkOffer.pick;
+    if (a === bIdx) fail('递过来的两支粉笔是同一个颜色');
+    if (chalkOffer.buttons.length !== 2) fail(`粉笔二选一摆了 ${chalkOffer.buttons.length} 支，应该是 2 支`);
+    if (chalkOffer.buttons.map(Number).sort().join(',') !== [a, bIdx].sort().join(',')) {
+      fail(`二选一的按钮颜色和事件给的两支对不上（${chalkOffer.buttons} / ${a},${bIdx}）`);
+    }
+    if (!chalkOffer.pickVisible) fail('递粉笔时对白区没有摆出二选一');
+    const chosen = a, unchosen = bIdx;
+    const chosenName = await page.evaluate((i) => window.__board.board.COLORS[i].name, chosen);
+    const unchosenHex = await page.evaluate((i) => window.__board.board.COLORS[i].hex, unchosen);
+    const chosenHex = await page.evaluate((i) => window.__board.board.COLORS[i].hex, chosen);
+    const pickedLinePool = await page.evaluate((n) => window.ACT2.Lines.LINES.chalk.picked[n], chosenName);
+    await page.evaluate((i) => {
+      document.querySelector(`#pick button[data-color="${i}"]`).click();
+    }, chosen);
+    await page.waitForTimeout(200);
+    const afterPick = await page.evaluate(() => ({
+      colorIndex: window.__board.board.state.colorIndex,
+      pickerHidden: document.getElementById('pick').hidden,
+      pick: window.__board.state().chalkPick,
+      line: document.getElementById('subsLine').textContent,
+      decos: window.__board.board.decos().map((d) => d.color)
+    }));
+    if (afterPick.colorIndex !== chosen) fail(`选了第 ${chosen} 支粉笔，当前色却是 ${afterPick.colorIndex}`);
+    if (!afterPick.pickerHidden || afterPick.pick) fail('选完粉笔之后二选一还挂着');
+    if (!pickedLinePool.includes(afterPick.line)) fail(`选完粉笔她说的话不在 chalk.picked 里：${afterPick.line}`);
+    // 等她把装饰补完：她用的必须是没被选的那支
+    await page.waitForTimeout(1700);
+    const chalkDeco = await page.evaluate(() => ({
+      decos: window.__board.board.decos().map((d) => d.color),
+      assists: window.__board.girl.assists
+    }));
+    if (!chalkDeco.decos.includes(unchosenHex)) {
+      fail(`她补的装饰没用没被选的那支（期望 ${unchosenHex}，实际 ${JSON.stringify(chalkDeco.decos)}）`);
+    }
+    if (chosenHex !== unchosenHex && chalkDeco.decos.includes(chosenHex)) {
+      fail('她拿玩家选中的那支去补了装饰，和「两个人共用两支笔」不符');
+    }
+  }
+
+  // ---- 1.5 结算聚合：colorCount / fillRatio / patternCount / balance
+  // 手工构造一块已知的板面，再和独立扫描对账——避免「聚合函数自己跟自己一致」。
+  const agg = await page.evaluate(() => {
+    const b = window.__board.board;
+    const g = window.__board.girl;
+    b.clearAll();
+    g.reset();
+    b.setTool('pen');
+    b.setWidth(3);
+    b.setColor(1);
+    b.down(70, 100); b.move(160, 100); b.up();
+    b.setColor(3);
+    b.down(300, 120); b.move(380, 120); b.up();
+    b.setColor(2);
+    b.setPattern('star');
+    b.placePattern(80, 210);
+    b.placePattern(360, 210);
+    const st = b.stats();
+    const map = b.inkMap();
+    let left = 0, right = 0;
+    for (let y = 0; y < b.BH; y++) {
+      for (let x = 0; x < b.BW; x++) {
+        if (!map[y * b.BW + x]) continue;
+        if (x < b.BW / 2) left++; else right++;
+      }
+    }
+    return { st, left, right, cover: b.regions().main.cover };
+  });
+  if (agg.st.colorCount !== 3) {
+    fail(`结算 colorCount=${agg.st.colorCount}，手画两色 + 两个粉色图案应该是 3`);
+  }
+  if (agg.st.patternCount !== 2) fail(`结算 patternCount=${agg.st.patternCount}，应该是 2`);
+  if (Math.abs(agg.st.fillRatio - agg.cover) > 1e-9) {
+    fail(`结算 fillRatio=${agg.st.fillRatio} 和主图覆盖率 ${agg.cover} 对不上`);
+  }
+  if (agg.st.left !== agg.left || agg.st.right !== agg.right) {
+    fail(`结算左右笔迹量（${agg.st.left}/${agg.st.right}）和独立扫描（${agg.left}/${agg.right}）对不上`);
+  }
+  const wantBalance = (agg.left + agg.right) ? Math.abs(agg.left - agg.right) / (agg.left + agg.right) : 0;
+  if (Math.abs(agg.st.balance - wantBalance) > 1e-9) {
+    fail(`结算 balance=${agg.st.balance}，手工算出来是 ${wantBalance}`);
+  }
+
+  // ---- 1.3 接力描线：她起一笔（30–60px）→ 端点 12px 内接上 / 超时淡出 / 一次撤销
+  // 同样是「布置 + force」一次 evaluate 做完，避免中间一帧她的 AI 先接走任务。
+  const relayKind = await page.evaluate(() => {
+    window.__relayEvents = [];
+    window.addEventListener('board:relay', (e) => window.__relayEvents.push(e.detail));
+    const b = window.__board.board;
+    const g = window.__board.girl;
+    b.clearAll();
+    g.reset();
+    b.setTool('rect');
+    b.setWidth(2);
+    b.down(6, 6); b.move(442, 234); b.up();      // 边框先补齐，否则她先去补边框
+    b.setPattern('star');
+    b.placePattern(60, 210); b.placePattern(224, 210); b.placePattern(380, 210);
+    b.setTool('pen');
+    b.setWidth(3);
+    g.skipCooldown();
+    return g.force();
+  });
+  if (relayKind !== 'relay') fail(`该接力描线的时候她做的是 ${relayKind}`);
+  await page.waitForTimeout(900);
+  const relayInfo = await page.evaluate(() => {
+    const g = window.__board.girl;
+    return {
+      relay: g.relay,
+      hint: window.__board.board.relayHint(),
+      ev: window.__relayEvents[window.__relayEvents.length - 1],
+      assists: g.assists,
+      frameTop: window.__board.board.regions().frame.edges.top
+    };
+  });
+  if (!relayInfo.relay) fail('她起了接力笔，但没有留下端点（girl.relay 为空）');
+  else {
+    if (!relayInfo.hint || relayInfo.hint.alpha <= 0) fail('接力端点没有高亮');
+    if (!relayInfo.ev || relayInfo.ev.len < 30 || relayInfo.ev.len > 60) {
+      fail(`接力起笔长度 ${relayInfo.ev && relayInfo.ev.len} 不在 30–60px`);
+    }
+    // 接上：真实鼠标从端点附近落笔
+    const ep = relayInfo.relay;
+    const sp = await toScreen(ep.x + 2, ep.y + 2);
+    await page.mouse.move(sp.x, sp.y);
+    await page.mouse.down();
+    await page.mouse.move(sp.x + 34, sp.y + 10, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(220);
+    const connected = await page.evaluate(() => ({
+      relay: window.__board.girl.relay,
+      hint: window.__board.board.relayHint(),
+      line: document.getElementById('subsLine').textContent,
+      relayLines: window.ACT2.Lines.LINES.relay,
+      assists: window.__board.girl.assists
+    }));
+    if (connected.relay || connected.hint) fail('接上接力笔之后端点还留着');
+    if (!connected.relayLines.includes(connected.line)) {
+      fail(`接上接力之后她没念 LINES.relay 里的句子：${connected.line}`);
+    }
+    if (connected.assists !== relayInfo.assists) fail('接上接力不应该再多算一次辅助');
+  }
+  // 一次撤销整笔
+  const relayUndo = await page.evaluate(() => {
+    const b = window.__board.board;
+    const g = window.__board.girl;
+    g.reset();
+    g.skipCooldown();
+    return { ink: b.assist.count(), kind: g.force() };
+  });
+  await page.waitForTimeout(900);
+  const relayDrawn = await page.evaluate(() => ({
+    ink: window.__board.board.assist.count(),
+    relay: !!window.__board.girl.relay
+  }));
+  if (relayUndo.kind !== 'relay' || relayDrawn.ink <= relayUndo.ink) fail('第二次接力笔没有落进她的图层');
+  await page.evaluate(() => window.__board.board.undo());
+  await page.waitForTimeout(350);
+  const relayUndone = await page.evaluate(() => ({
+    ink: window.__board.board.assist.count(),
+    relay: window.__board.girl.relay,
+    hint: window.__board.board.relayHint()
+  }));
+  if (relayUndone.ink >= relayDrawn.ink) fail('撤销一次没有撤掉接力整笔');
+  if (relayUndone.relay || relayUndone.hint) fail('撤销之后接力端点还亮着');
+  // 超时淡出：不接就自然消失，不算失败、不重开
+  const relayTimeout = await page.evaluate(() => {
+    const g = window.__board.girl;
+    g.reset();
+    g.skipCooldown();
+    return g.force();
+  });
+  await page.waitForTimeout(1500);
+  const relayAlive = await page.evaluate(() => ({
+    relay: !!window.__board.girl.relay,
+    hint: window.__board.board.relayHint()
+  }));
+  if (relayTimeout !== 'relay' || !relayAlive.relay) fail('第三次接力笔没有进入等待接上的状态');
+  await page.waitForTimeout(5600);
+  const relayExpired = await page.evaluate(() => ({
+    relay: window.__board.girl.relay,
+    hint: window.__board.board.relayHint(),
+    state: window.__board.state().state,
+    locked: window.__board.board.state.locked,
+    assists: window.__board.girl.assists
+  }));
+  if (relayExpired.relay || relayExpired.hint) fail('接力超时之后端点没有淡掉');
+  if (relayExpired.state !== 'board' || relayExpired.locked) fail('接力超时把板面弄成了失败/锁定态');
+
+  // ---- 1.2 椅子描顶边：主图达标 + 上边框 < 50% 触发；指针出界只停笔；画完说两句
+  await page.evaluate(() => {
+    const b = window.__board.board;
+    const g = window.__board.girl;
+    b.clearAll();
+    g.reset();
+    b.setTool('pen');
+    b.setWidth(3);
+    // 下 / 左 / 右边，故意不画上边
+    b.down(6, 234); b.move(442, 234); b.up();
+    b.down(6, 200); b.move(6, 6); b.up();
+    b.down(442, 200); b.move(442, 6); b.up();
+    // 主图填起来
+    for (let y = 52; y <= 172; y += 6) { b.down(20, y); b.move(428, y); b.up(); }
+    b.commitText('春天来了', 120, 30, 18);
+    b.setPattern('star');
+    b.placePattern(60, 210); b.placePattern(224, 210); b.placePattern(380, 210);
+  });
+  await page.waitForFunction(() => window.__board.state().chair.phase !== 'off', null, { timeout: 8000 });
+  const chairTriggered = await page.evaluate(() => {
+    const s = window.__board.state();
+    return { chair: s.chair, locked: s.locked, top: s.regions.frame.edges.top, state: s.state };
+  });
+  if (chairTriggered.state !== 'board') fail(`椅子事件把场景切到了 ${chairTriggered.state}`);
+  if (chairTriggered.top >= 0.5) fail(`椅子事件触发时上边框已经 ${chairTriggered.top.toFixed(2)}，不该触发`);
+  await page.waitForFunction(() => window.__board.state().chair.phase === 'play', null, { timeout: 6000 });
+  if (!(await page.evaluate(() => window.__board.state().locked))) fail('椅子段没有锁住玩家画笔（她站椅子上时不该还能画）');
+  // 指针出界：只停笔，不失败、不退进度。按住 A 直到指针被压出绿区，
+  // 出界之后再量进度（压出去的过程本身还在绿区里，会正常涨一点）。
+  await page.keyboard.down('KeyA');
+  let chairOut = null;
+  for (let i = 0; i < 30; i++) {
+    chairOut = await page.evaluate(() => window.__board.state().chair);
+    if (!chairOut.inZone) break;
+    await page.waitForTimeout(60);
+  }
+  if (!chairOut || chairOut.inZone) fail('一直按 A，指针都没离开绿区——出界逻辑没生效');
+  const pausedProgress = chairOut.progress;
+  const pausedAt = chairOut.paused;
+  await page.waitForTimeout(380);
+  const chairHeld = await page.evaluate(() => window.__board.state().chair);
+  await page.keyboard.up('KeyA');
+  if (chairHeld.progress > pausedProgress + 0.02) fail('指针出界期间进度还在涨（应该停笔等待）');
+  if (chairHeld.paused <= pausedAt) fail('指针出界没有累计停笔时间（应该只是停笔，不是失败）');
+  if (chairHeld.inZone) fail('按住 A 时指针又被漂回绿区了，测不到出界停笔');
+  if ((await page.evaluate(() => window.__board.state().state)) !== 'board') fail('指针出界被当成了失败/退出');
+  // 把指针压回绿区：反馈式按键直到她描完
+  for (let i = 0; i < 220; i++) {
+    const s = await page.evaluate(() => window.__board.state());
+    if (s.chair.done) break;
+    if (s.chair.phase === 'play' && !s.chair.inZone) {
+      const key = s.chair.pos < 0.5 ? 'KeyD' : 'KeyA';
+      await page.keyboard.down(key);
+      await page.waitForTimeout(80);
+      await page.keyboard.up(key);
+    } else {
+      await page.waitForTimeout(80);
+    }
+  }
+  const chairPlayed = await page.evaluate(() => ({
+    chair: window.__board.state().chair,
+    top: window.__board.board.regions().frame.edges.top
+  }));
+  if (!chairPlayed.chair.done) fail(`指针稳住 6 秒她还没描完顶边（progress=${chairPlayed.chair.progress}）`);
+  if (chairPlayed.top < 0.5) fail(`顶边描完了，上边框覆盖率只有 ${chairPlayed.top.toFixed(2)}`);
+  // 描完那两句专属对白（走对白区，按 E 推进）
+  const chairLines = [];
+  for (let i = 0; i < 10; i++) {
+    const info = await page.evaluate(() => ({
+      manual: window.__board.chat.manual,
+      line: document.getElementById('subsLine').textContent,
+      phase: window.__board.state().chair.phase
+    }));
+    if (info.manual && info.line && chairLines[chairLines.length - 1] !== info.line) chairLines.push(info.line);
+    if (info.phase === 'off') break;
+    await page.keyboard.press('KeyE');
+    await page.waitForTimeout(300);
+  }
+  await page.waitForFunction(() => window.__board.state().chair.phase === 'off', null, { timeout: 8000 });
+  const chairAfter = await page.evaluate(() => ({
+    locked: window.__board.board.state.locked,
+    themePicking: window.__board.state().themePicking,
+    doneLines: window.ACT2.Lines.LINES.chairDone,
+    pull: +window.__board.scene.pull.toFixed(2)
+  }));
+  if (!chairLines.some((l) => chairAfter.doneLines.includes(l))) fail('椅子画完没有说那两句专属对白');
+  if (chairAfter.locked) fail('椅子段结束了板面还锁着');
+  if (chairAfter.pull > 0.02) fail(`椅子段结束镜头没有退回来（pull=${chairAfter.pull}）`);
+  await page.screenshot({ path: path.join(OUT, '01b-chair.png') });
+
+  // 椅子事件过后清干净，回到原来的自检路径
+  await page.evaluate(() => {
+    const b = window.__board.board;
+    b.clearAll();
+    window.__board.girl.reset();
+    b.setTool('pen');
+  });
 
   // 测图案这几组先把她按住：装饰区空着的时候她会自己添一个，
   // 一添就把「第几个图案」「图案落在哪」全部错位。到第 4 组再放她出来。
@@ -558,15 +938,62 @@ const OUT = path.resolve(__dirname, 'out');
   if (!inPng) fail('完成时板面上一个图案都没有');
   else if (inPng.bright < 30) fail(`导出图里没有图案（${inPng.pid} 的框里只有 ${inPng.bright} 个亮像素）`);
 
-  // 结尾几句走画布下面那条对白区（不压板面），按 E 推进；读完了卡才出来
-  for (let i = 0; i < 24; i++) {
-    const shown = await page.evaluate(() => document.getElementById('card').classList.contains('show'));
-    if (shown) break;
+  // 结尾几句走画布下面那条对白区（不压板面），按 E 推进；读完了卡才出来。
+  // 顺手把逐句念过的台词记下来——结算评价必须真的说出口，不能只写存档。
+  const endLines = [];
+  for (let i = 0; i < 40; i++) {
+    const info = await page.evaluate(() => ({
+      shown: document.getElementById('card').classList.contains('show'),
+      line: document.getElementById('subsLine').textContent,
+      manual: window.__board.chat.manual
+    }));
+    if (info.line && endLines[endLines.length - 1] !== info.line && info.manual) endLines.push(info.line);
+    if (info.shown) break;
     await page.keyboard.press('KeyE');
     await page.waitForTimeout(220);
   }
   const cardShown = await page.evaluate(() => document.getElementById('card').classList.contains('show'));
   if (!cardShown) fail('结尾对白读完后完成卡没有出现');
+
+  // ---- 1.5 结算评价写档：{ theme, themeName, evalIds, evals:[{id,text}] }，2–3 句
+  const evalSaved = await page.evaluate(() => {
+    const raw = localStorage.getItem('our-story-act2-board-eval-v1');
+    return raw ? JSON.parse(raw) : null;
+  });
+  if (!evalSaved) fail('完成时没有写 our-story-act2-board-eval-v1');
+  else {
+    if (evalSaved.theme !== 'reading') fail(`结算存档里的主题是 ${evalSaved.theme}，应该是 reading`);
+    if (evalSaved.themeName !== '读书周') fail(`结算存档里的主题名是 ${evalSaved.themeName}`);
+    if (!Array.isArray(evalSaved.evalIds) || evalSaved.evalIds.length < 2 || evalSaved.evalIds.length > 3) {
+      fail(`evalIds 应该有 2–3 个，实际是 ${JSON.stringify(evalSaved.evalIds)}`);
+    }
+    if (!Array.isArray(evalSaved.evals) || evalSaved.evals.length !== (evalSaved.evalIds || []).length) {
+      fail('evals 和 evalIds 数量不一致（第四幕要按顺序读整句）');
+    } else {
+      evalSaved.evals.forEach((e, i) => {
+        if (e.id !== evalSaved.evalIds[i]) fail(`evals[${i}].id 和 evalIds[${i}] 不一致`);
+        if (!e.text || typeof e.text !== 'string') fail(`evals[${i}] 没有整句文本`);
+        else if (!endLines.includes(e.text)) fail(`评价句没有真的说出口：${e.text}`);
+      });
+    }
+    const validIds = await page.evaluate(() => window.ACT2.Lines.DONE_EVAL.map((t) => t.id));
+    for (const id of evalSaved.evalIds || []) {
+      if (!validIds.includes(id)) fail(`评价句 id ${id} 不在 DONE_EVAL 里`);
+    }
+    // 确定性：同一块板、同一主题重算，应该还是同一组 id / 文本（§0.5）
+    const rerun = await page.evaluate(() => {
+      const b = window.__board.board;
+      return window.ACT2.Lines.pickEvals(b.stats(), 'reading');
+    });
+    if (JSON.stringify(rerun.map((e) => e.id)) !== JSON.stringify(evalSaved.evalIds)) {
+      fail('结算评价的挑选不可复现（同一块板两次算出不同的 id）');
+    }
+    if (JSON.stringify(rerun.map((e) => e.text)) !== JSON.stringify((evalSaved.evals || []).map((e) => e.text))) {
+      fail('结算评价的文本不可复现（同一块板两次算出不同的句子）');
+    }
+    const devApi = await page.evaluate(() => window.__board.eval());
+    if (!devApi || JSON.stringify(devApi) !== JSON.stringify(evalSaved)) fail('__board.eval() 和写进存档的不一致');
+  }
   await page.waitForTimeout(600);
   await page.screenshot({ path: path.join(OUT, '04-done.png') });
 
@@ -576,6 +1003,7 @@ const OUT = path.resolve(__dirname, 'out');
     return raw ? JSON.parse(raw) : null;
   });
   if (!saved || !saved.png) fail('作品没有存进 localStorage');
+  if (saved && saved.theme !== 'reading') fail(`画板存档里的主题是 ${saved && saved.theme}，应该是 reading`);
   if (saved && (!saved.decos || saved.decos.length !== 3)) {
     fail(`存档里的图案数量不对（${saved && saved.decos ? saved.decos.length : 'none'}）`);
   }
@@ -583,9 +1011,18 @@ const OUT = path.resolve(__dirname, 'out');
   // ---- 7. 自然触发：重开一块板，玩家画一笔，然后什么都不做，她自己应该会动手
   await page.click('#again');
   await page.waitForFunction(() => window.__board.state().state === 'board', null, { timeout: 5000 });
-  const re = await page.evaluate(() => ({ locked: window.__board.state().locked, done: window.__board.state().allDone }));
+  const re = await page.evaluate(() => ({
+    locked: window.__board.state().locked,
+    done: window.__board.state().allDone,
+    theme: window.__board.state().theme,
+    themePicking: window.__board.state().themePicking,
+    chairDone: window.__board.state().chair.done
+  }));
   if (re.locked) fail('「再画一次」之后板面还锁着');
   if (re.done) fail('「再画一次」之后旧的完成状态没有清掉');
+  if (re.theme !== 'reading') fail(`「再画一次」之后主题变成了 ${re.theme}`);
+  if (re.themePicking) fail('「再画一次」又把主题选择题弹出来了（同一张板应该沿用主题）');
+  if (re.chairDone) fail('「再画一次」之后椅子事件没有复位');
 
   await page.evaluate(() => { window.__board.board.clearAll(); window.__board.board.setTool('pen'); });
   await drag(200, 100, 260, 130, 10);
@@ -608,6 +1045,16 @@ const OUT = path.resolve(__dirname, 'out');
   await page.screenshot({ path: path.join(OUT, '05-natural.png') });
 
   // ---- 8. 存档恢复：刷新页面，上一张应该还在
+  // 顺手把 theme 字段删掉，模拟这一版之前的旧存档：必须能读、按读书周兜底、不报错。
+  await page.evaluate(() => {
+    const raw = localStorage.getItem('our-story-act2-board-v2');
+    if (raw) {
+      const d = JSON.parse(raw);
+      delete d.theme;
+      localStorage.setItem('our-story-act2-board-v2', JSON.stringify(d));
+    }
+    localStorage.removeItem('our-story-act2-board-eval-v1');
+  });
   await page.goto(PAGE, { waitUntil: 'load' });
   await page.waitForFunction(() => window.__board && window.__board.state, null, { timeout: 30000 });
   for (let i = 0; i < 100; i++) {
@@ -621,6 +1068,9 @@ const OUT = path.resolve(__dirname, 'out');
   const restored = await page.evaluate(() => window.__board.state());
   if (!restored.regions.title.done) fail('刷新后存档没有恢复（标题区丢了）');
   if (!restored.allDone) fail('刷新后存档不完整');
+  // 旧存档（没有 theme 字段）兜底：按读书周读入，不报错、不清档
+  if (restored.theme !== 'reading') fail(`旧存档（无 theme）没有按读书周兜底：${restored.theme}`);
+  if (restored.themePicking) fail('旧存档恢复之后还弹主题选择题，应该直接接着画');
 
   // ---- 8.5 底稿的开关与复位
   await page.keyboard.press('KeyG');
