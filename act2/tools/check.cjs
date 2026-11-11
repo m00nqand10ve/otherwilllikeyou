@@ -91,6 +91,18 @@ const OUT = path.resolve(__dirname, 'out');
   if (keyPicked.theme !== 'sports') fail(`数字键 1 没有选到运动会（${keyPicked.theme}）`);
   if (keyPicked.picker) fail('用数字键选完主题，选择题还挂着');
 
+  // ---- 1.1b 工具热键不能和「E = 推进/互动」抢：橡皮挪到 X
+  await page.keyboard.press('KeyB');
+  await page.keyboard.press('KeyX');
+  await page.waitForTimeout(120);
+  const toolByX = await page.evaluate(() => window.__board.board.state.tool);
+  if (toolByX !== 'erase') fail(`按 X 没有切到橡皮（${toolByX}）`);
+  await page.keyboard.press('KeyE');
+  await page.waitForTimeout(120);
+  const toolAfterE = await page.evaluate(() => window.__board.board.state.tool);
+  if (toolAfterE !== 'erase') fail(`E 还是橡皮热键（按 E 后工具变成 ${toolAfterE}），会和推进对白冲突`);
+  await page.keyboard.press('KeyB');
+
   // 三个主题逐个切：底稿构图（画稿指纹 + ghostKey）、图案推荐组、主色调都必须变
   const themes = {};
   for (const id of ['sports', 'reading', 'graduation']) {

@@ -853,8 +853,14 @@ async function checkBrowser(browser) {
   }));
   if (!diffUi.show) fail("档位选择层没有出现");
   if (JSON.stringify(diffUi.opts) !== JSON.stringify(DIFF_NAMES)) fail(`档位按钮是 ${diffUi.opts.join("/")}`);
-  // 选「演播」进正式录
-  await page.click('#diff [data-d="演播"]');
+  // 选「演播」进正式录：空格 / Enter 都是「用上次的档」，这里默认档就是演播
+  await page.keyboard.press("Space");
+  await page.waitForFunction(() => window.__bc.state().state === "ready" || window.__bc.state().state === "play", null, { timeout: 8000 }).catch(() => { });
+  const diffState = await page.evaluate(() => window.__bc.state());
+  if (diffState.state !== "ready" && diffState.state !== "play") {
+    fail(`在档位选择按空格没有进入录制（${diffState.state}）`);
+  }
+  if (diffState.difficulty !== "演播") fail(`空格选的档位是 ${diffState.difficulty}，应该是上次的演播`);
   const savedDiff = await page.evaluate(() => {
     try { return localStorage.getItem("act3-difficulty-v1"); } catch (e) { return null; }
   });

@@ -284,6 +284,13 @@
     step();
   }
 
+  // 点对白框也能推进，和 E / 空格 / Enter 一致。
+  dlgEl.addEventListener("pointerdown", (e) => {
+    if (!dlg) return;
+    e.preventDefault();
+    advance();
+  });
+
   // ---------------------------------------------------------------- 场景素材
   // 与第二幕广播室共用同一张背景；桌面前板单独盖在人物下半身前。
   const DESK = { x: 70, y: 188, w: 269, h: 75 };
@@ -1402,7 +1409,7 @@
     if (sc.state === "diff") {
       if (k === "f" || e.key === "1") { e.preventDefault(); applyDifficulty("演播"); return; }
       if (k === "j" || e.key === "2") { e.preventDefault(); applyDifficulty("电台"); return; }
-      if (e.key === "Enter") { e.preventDefault(); applyDifficulty(difficulty); return; }
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); applyDifficulty(difficulty); return; }
     }
     if (dlg && (e.key === "Enter" || e.key === " " || k === "e")) {
       e.preventDefault();

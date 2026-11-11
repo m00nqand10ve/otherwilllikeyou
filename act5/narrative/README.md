@@ -18,4 +18,4 @@
 
 ## 验证
 
-在项目根目录运行 `node act5/narrative/tools/check.cjs`，会走通前半段和收尾，并检查收尾卡的「回到开头」（`../../index.html`、`target="_top"`），预览图落在 `tools/`。全流程入口和「继续上次」的接缝由 `node tools/full-story-check.cjs` 检查；第四幕 → 本模块的框内跳转由 `game/dust-corridor/tools/story-chain-check.mjs` 检查。亦可直接用浏览器打开 `index.html`，用 `E` / Enter 翻页，数字键或点击选项。
+在项目根目录运行 `node act5/narrative/tools/check.cjs`，会走通前半段和收尾，并检查收尾卡的「回到开头」（`../../index.html`、`target="_top"`），预览图落在 `tools/`。全流程入口和「继续上次」的接缝由 `node tools/full-story-check.cjs` 检查；第四幕 → 本模块的框内跳转由 `game/dust-corridor/tools/story-chain-check.mjs` 检查。亦可直接用浏览器打开 `index.html`，用 `E` / Enter / 空格 翻页，数字键或点击选项。

@@ -109,6 +109,14 @@
     next();
   }
 
+  // 点对白框也能推进：和 E / 空格 / Enter 一样，先补完这一行，再翻下一句。
+  // （以前只挂了 E 的键帽，框上却是 pointer 光标，点了没反应。）
+  dlgEl.addEventListener("pointerdown", (e) => {
+    if (!dlg) return;
+    e.preventDefault();
+    advance();
+  });
+
   // 她画画时说话：走画布下面那条字幕，不挡笔。
   //
   // 画板期间只有这一条文字通道——她补完一笔、玩家擦掉一笔、她自己闲聊，
@@ -925,7 +933,7 @@
     });
 
     const tools = el("tools");
-    [["pen", "画笔", "B"], ["erase", "橡皮", "E"], ["line", "直线", "L"],
+    [["pen", "画笔", "B"], ["erase", "橡皮", "X"], ["line", "直线", "L"],
      ["rect", "方框", "R"], ["text", "文字", "T"], ["stamp", "图案", "S"]].forEach(([k, name, key]) => {
       const b = document.createElement("button");
       b.dataset.tool = k;
@@ -1402,7 +1410,7 @@
     // 还没选主题就按了别的键：先按默认主题开始，别让工具键失灵
     if (sc.themePicking) pickTheme(board.themeInfo().id);
     if (k === "b") board.setTool("pen");
-    else if (k === "e") board.setTool("erase");
+    else if (k === "x") board.setTool("erase");
     else if (k === "l") board.setTool("line");
     else if (k === "r") board.setTool("rect");
     else if (k === "t") board.setTool("text");

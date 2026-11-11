@@ -30,12 +30,13 @@ Common keys:
 | Action | Key |
 | --- | --- |
 | Move | `WASD` / arrow keys |
-| Interact / advance dialogue | `E` / `Enter` |
+| Interact / advance dialogue | `E` / `Enter` (dialogue also advances with `Space` or a click) |
 | Pause (Act 1, school preview) | `Esc` |
 | Restart the current act | `R` |
 
 The blackboard and broadcast minigames have their own toolbars and rhythm mechanics;
-prompts appear on screen.
+prompts appear on screen. Inside a minigame `Space` is usually a hold/timing action
+(charge a shot, push a box, tap the metronome), so follow the hint shown there.
 
 ## Layout
 
