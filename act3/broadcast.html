@@ -5,6 +5,23 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>第三幕 · 晚间广播</title>
 <link rel="stylesheet" href="broadcast.css">
+<script>
+/* 同第二幕：Windows 自动隐藏任务栏弹出时会盖住页面最底部的广播稿字幕条。
+   工作区 == 整屏（任务栏自动隐藏）、窗口贴屏底、且保留浏览器标题栏时，
+   给页面底部让出 52px 安全区，字幕条就不会藏到任务栏下面。 */
+(function () {
+  var root = document.documentElement;
+  function fit() {
+    var s = window.screen;
+    var chrome = window.outerHeight - window.innerHeight;
+    var autoHide = !!s && s.availHeight >= s.height - 1;
+    var atBottom = !!s && window.screenY + window.outerHeight >= s.availHeight - 2;
+    root.style.setProperty("--safe-b", autoHide && atBottom && chrome > 0 ? "52px" : "0px");
+  }
+  fit();
+  window.addEventListener("resize", fit);
+})();
+</script>
 </head>
 <body>
 <div id="stage">

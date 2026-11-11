@@ -5,6 +5,24 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>第二幕 · 一起完成的黑板报</title>
 <link rel="stylesheet" href="board.css">
+<script>
+/* Windows 开着「自动隐藏任务栏」时，任务栏一弹出来就压在页面最底下 48px 上——
+   第二幕的画笔工具条正好在那儿，鼠标往下走它就盖住按钮。
+   判断：工作区高度 == 整屏高度（任务栏不占位 = 自动隐藏）、窗口贴着屏幕底边、
+   且还留着浏览器标题栏的高度（不是 F11 全屏）。命中时给底部 UI 留安全区。 */
+(function () {
+  var root = document.documentElement;
+  function fit() {
+    var s = window.screen;
+    var chrome = window.outerHeight - window.innerHeight;
+    var autoHide = !!s && s.availHeight >= s.height - 1;
+    var atBottom = !!s && window.screenY + window.outerHeight >= s.availHeight - 2;
+    root.style.setProperty("--safe-b", autoHide && atBottom && chrome > 0 ? "52px" : "0px");
+  }
+  fit();
+  window.addEventListener("resize", fit);
+})();
+</script>
 </head>
 <body>
 <div id="stage" class="cinematic">

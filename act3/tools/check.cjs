@@ -786,6 +786,10 @@ async function checkBrowser(browser) {
   // Chrome 冷启动时首屏偶尔会慢过 30 秒，超时时间给足，别让自检假报错
   await page.goto(PAGE, { waitUntil: "load", timeout: 60000 });
   await page.waitForFunction(() => window.__bc && window.__bc.state, null, { timeout: 30000 });
+  {
+    const safe = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--safe-b").trim());
+    if (safe !== "0px") fail(`没有自动隐藏任务栏时不该让出底部安全区（--safe-b=${safe || "空"}）`);
+  }
 
   // 7.1 开场
   const s0 = await page.evaluate(() => window.__bc.state());
@@ -1151,7 +1155,33 @@ async function checkBrowser(browser) {
   if (errors2.length) fails.push(...errors2.slice(0, 4));
   await ctx2.close();
 
-  // 7.14 报错
+  // 7.14 自动隐藏任务栏的安全区：任务栏弹出来不能盖住广播稿字幕条
+  // 命中条件：工作区高度 == 整屏（任务栏不占位）、窗口贴着屏幕底、还留着浏览器标题栏。
+  const ctxSafe = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  await ctxSafe.addInitScript(() => {
+    Object.defineProperty(Screen.prototype, "height", { get: () => 720 });
+    Object.defineProperty(Screen.prototype, "availHeight", { get: () => 720 });
+    Object.defineProperty(window, "outerHeight", { get: () => 900 });
+  });
+  const pageSafe = await ctxSafe.newPage();
+  await pageSafe.goto(PAGE_NORMAL, { waitUntil: "load", timeout: 60000 });
+  await pageSafe.waitForFunction(() => window.__bc && window.__bc.state, null, { timeout: 30000 });
+  const safe = await pageSafe.evaluate(() => {
+    const st = document.getElementById("stage").getBoundingClientRect();
+    const sc = document.getElementById("script").getBoundingClientRect();
+    return {
+      v: getComputedStyle(document.documentElement).getPropertyValue("--safe-b").trim(),
+      stageBottom: Math.round(st.bottom),
+      scriptBottom: Math.round(sc.bottom),
+      inner: innerHeight
+    };
+  });
+  if (safe.v !== "52px") fail(`自动隐藏任务栏时底部安全区应该是 52px，实际 ${safe.v || "0"}`);
+  if (safe.stageBottom !== safe.inner - 52) fail(`底部安全区没让出来（stage 底 ${safe.stageBottom} / 视口 ${safe.inner}）`);
+  if (Math.abs(safe.scriptBottom - safe.stageBottom) > 1) fail(`字幕条没有落在安全区上沿（${safe.scriptBottom} / ${safe.stageBottom}）`);
+  await ctxSafe.close();
+
+  // 7.15 报错
   if (errors.length) fails.push(...errors.slice(0, 6));
   else ok("浏览器无报错");
 

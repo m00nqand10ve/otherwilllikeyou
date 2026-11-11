@@ -36,6 +36,10 @@ const OUT = path.resolve(__dirname, 'out');
   await page.goto(PAGE, { waitUntil: 'load' });
   await page.waitForFunction(() => window.__board && window.__board.state, null, { timeout: 30000 });
   await page.waitForTimeout(700);
+  {
+    const safe = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--safe-b').trim());
+    if (safe !== '0px') fail(`没有自动隐藏任务栏时不该让出底部安全区（--safe-b=${safe || '空'}）`);
+  }
   await page.screenshot({ path: path.join(OUT, '00-scene.png') });
 
   // ---- 开场对白与由乃短暂经过，一路 E 推过去
@@ -1300,6 +1304,33 @@ const OUT = path.resolve(__dirname, 'out');
   if (!/school-preview\.html/.test(page.url())) fail(`离开之后没有回到走廊（${page.url()}）`);
   // 宿主页自己的加载报错不算这块板的问题
   errors.length = errorsBeforeQuit;
+
+  // ---- 9.4 自动隐藏任务栏的安全区：任务栏弹出来不能盖住工具条
+  // 命中条件：工作区高度 == 整屏（任务栏不占位）、窗口贴着屏幕底、还留着浏览器标题栏。
+  const safePage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await safePage.addInitScript(() => {
+    Object.defineProperty(Screen.prototype, 'height', { get: () => 720 });
+    Object.defineProperty(Screen.prototype, 'availHeight', { get: () => 720 });
+    Object.defineProperty(window, 'outerHeight', { get: () => 900 });
+  });
+  await safePage.goto(PAGE, { waitUntil: 'load' });
+  await safePage.waitForFunction(() => window.__board && window.__board.state, null, { timeout: 30000 });
+  const safe = await safePage.evaluate(() => {
+    const stage = document.getElementById('stage');
+    stage.classList.remove('cinematic'); // 只量正常画板状态下的底边
+    const sr = stage.getBoundingClientRect();
+    const br = document.getElementById('bar').getBoundingClientRect();
+    return {
+      v: getComputedStyle(document.documentElement).getPropertyValue('--safe-b').trim(),
+      stageBottom: Math.round(sr.bottom),
+      barBottom: Math.round(br.bottom),
+      inner: innerHeight
+    };
+  });
+  if (safe.v !== '52px') fail(`自动隐藏任务栏时底部安全区应该是 52px，实际 ${safe.v || '0'}`);
+  if (safe.stageBottom !== safe.inner - 52) fail(`底部安全区没让出来（stage 底 ${safe.stageBottom} / 视口 ${safe.inner}）`);
+  if (Math.abs(safe.barBottom - safe.stageBottom) > 1) fail(`工具条没有落在安全区上沿（${safe.barBottom} / ${safe.stageBottom}）`);
+  await safePage.close();
 
   // ---- 10. 报错
   if (errors.length) failures.push(...errors.slice(0, 6));

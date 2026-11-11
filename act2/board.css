@@ -30,6 +30,12 @@ body {
   flex-direction: column;
   background: #4e3e49;
 }
+/* 自动隐藏任务栏的安全区（值由 blackboard.html 顶部的内联脚本设置）：
+   工具条和对白都贴着底边，任务栏弹出来会正好压住它们。
+   cinematic 镜头要铺满整屏、且没有底部 UI，所以只在正常画板状态下让出这条。 */
+#stage:not(.cinematic) {
+  bottom: var(--safe-b, 0px);
+}
 /* 图案面板展开时把画布压小一点，而不是盖在画面上——
    面板要盖的正好是装饰区，那是最需要看得见的地方 */
 
