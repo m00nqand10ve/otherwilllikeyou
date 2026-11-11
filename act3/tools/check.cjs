@@ -541,11 +541,13 @@ function checkBoth(A) {
   r.update(ev.time + 0.001);
   if (!herNote.judged) fail("both 块的她那一侧没有自动命中");
 
-  // 按住了但没松手：到点自动松开，算同步（窗口内）
+  // 按住了但一直不松手：超过 +200ms 同步窗后按「晚松」结算，不能算同步
   setup();
   r.press(ev.time + 0.02, "hi");
   r.update(target + 0.09);
-  if (!r.state.syncBoth) fail("both 块按住到自动松手没有算同步");
+  if (r.state.syncBoth) fail("both 块还没到同步窗边缘就判了同步");
+  r.update(target + 0.21);
+  if (r.state.syncBoth) fail("both 块按住到自动松手仍算了同步（应该按晚松判）");
 
   // 同步窗口和难度无关
   for (const name of DIFF_NAMES) {
@@ -876,14 +878,25 @@ async function checkBrowser(browser) {
   // 音频时钟也要跟着末段加速：拍 → 秒的换算和谱面一致
   const tempo = await page.evaluate(() => {
     const a = window.__bc.audio, c = window.__bc.chart;
+    let maxT = 0, maxB = 0;
+    for (let b = 0; b <= c.totalBeats; b += 0.37) {
+      maxT = Math.max(maxT, Math.abs(a.beatTime(b) - c.timeOfBeat(b)));
+      maxB = Math.max(maxB, Math.abs(a.beatAt(c.timeOfBeat(b)) - c.beatOfTime(c.timeOfBeat(b))));
+    }
     return {
       accel: c.accelBeat,
       d4: a.beatTime(c.accelBeat + 4) - a.beatTime(c.accelBeat),
-      seekRound: a.beatAt(c.timeOfBeat(c.accelBeat + 2))
+      seekRound: a.beatAt(c.timeOfBeat(c.accelBeat + 2)),
+      maxT: maxT,
+      maxB: maxB
     };
   });
   if (Math.abs(tempo.d4 - 4 * 60 / 108) > 1e-6) fail(`音频时钟没有跟着末段加速（4 拍 = ${tempo.d4.toFixed(3)}s）`);
   if (Math.abs(tempo.seekRound - (tempo.accel + 2)) > 1e-6) fail("音频的拍 ↔ 秒换算不可逆");
+  // 拍 ↔ 秒只有谱面这一份实现；音频必须全程和它一致，不能各写一份后悄悄错位
+  if (tempo.maxT > 1e-9 || tempo.maxB > 1e-9) {
+    fail(`音频和谱面的拍 ↔ 秒映射不一致（拍→秒 ${tempo.maxT}，秒→拍 ${tempo.maxB}）`);
+  }
 
   // 7.6 打开自动弹：按音高按 F/J，故意漏掉所有接力（验证补位）
   await page.evaluate(() => {

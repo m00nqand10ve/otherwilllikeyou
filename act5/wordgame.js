@@ -1612,10 +1612,8 @@
       D.onPoke(poke);
       state = "intro";
 
-      // 5.5 抽题：种子 = 本场游玩次（模块内的 store 计数，旧档没有就按 0 起算）
-      const runs = (D.store.wordRuns || 0) + 1;
-      D.store.wordRuns = runs;
-      D.persist();
+      // 5.5 抽题：种子 = 本场游玩次（完成时 +1；中途刷新重进仍是同一轮题目）
+      const runs = Math.max(0, Number(D.store.wordRuns) || 0);
       roundSeqSeed = runs;
       drawn = pickQuestions(runs);
 
@@ -1652,7 +1650,7 @@
       ];
       await D.lines(lines);
 
-      D.persist({ wordGameCompleted: true, wordGameCorrect: correct, wordGameHints: hints });
+      D.persist({ wordGameCompleted: true, wordGameCorrect: correct, wordGameHints: hints, wordRuns: runs + 1 });
       host.done({
         id: "word_guess",
         completed: true,

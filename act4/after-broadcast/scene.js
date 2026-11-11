@@ -48,7 +48,9 @@
   const BOARD_MEMORY_TEXT = (() => {
     const e = ACT2_EVAL;
     if (!e || !e.themeName) return "画黑板报的时候，她把粉笔递给我，自己留下来补那些细细的边。";
-    const said = e.evals && e.evals[0] && e.evals[0].text ? "「" + e.evals[0].text + "」" : "这样就好。";
+    const said = e.evals && e.evals[0] && e.evals[0].text
+      ? "「" + String(e.evals[0].text).replace(/[。！？!?]$/, "") + "」"
+      : "这样就好。";
     return "画黑板报的时候，她说这期做「" + e.themeName + "」。后来她退开两步看了看，说" + said + "。";
   })();
 

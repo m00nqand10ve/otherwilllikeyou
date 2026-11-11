@@ -368,6 +368,90 @@ const OUT = path.resolve(__dirname, 'out');
     }
   }
 
+  // ---- 1.4b 二选一期间她不自己接活；选完不打断手上的笔，且总辅助不超过 6 次
+  const pickPaused = await page.evaluate(() => {
+    const b = window.__board.board, g = window.__board.girl;
+    b.clearAll();
+    g.reset();
+    // reset 会把冷却拨回 2 秒；这里直接跳到「看得够久、可以接活」的时刻，
+    // 才测得到「二选一开着时她也不自己开工」。
+    g.skipCooldown();
+    g.noteStroke(0); g.noteStroke(0); g.noteStroke(0);
+    return {
+      pick: window.__board.state().chalkPick,
+      active: g.active
+    };
+  });
+  if (!pickPaused.pick) fail('二选一状态机自检：没有触发递粉笔');
+  else {
+    // 屏幕上的二选一开着时，她应该被停住：给足冷却和观察时间也不能自己开工
+    await page.evaluate(() => window.__board.girl.skipCooldown());
+    await page.waitForTimeout(1400);
+    const pausedState = await page.evaluate(() => ({
+      active: window.__board.girl.active,
+      pick: window.__board.state().chalkPick
+    }));
+    if (pausedState.active) fail('粉笔二选一开着时她自己接了新辅助（状态机没暂停）');
+    if (!pausedState.pick) fail('等待期间二选一自己消失了');
+  }
+  // 她手上正有一笔时选粉笔：那一笔不能被清队列/重启，只能排队等它收尾
+  const chalkBusy = await page.evaluate(() => {
+    const g = window.__board.girl;
+    const pick = window.__board.state().chalkPick;
+    g.skipCooldown();
+    const kind = g.force();
+    const before = { kind: kind, active: g.active, assists: g.assists };
+    const chosen = pick ? pick.a : 0;
+    const res = pick ? window.__board.chooseChalk(chosen) : null;
+    return {
+      before: before,
+      after: { kind: g.kind, active: g.active, assists: g.assists },
+      res: res,
+      pick: window.__board.state().chalkPick,
+      hidden: document.getElementById('pick').hidden
+    };
+  });
+  if (!chalkBusy.before.active) fail('二选一打断自检：force 没有让她进入辅助状态');
+  else {
+    if (chalkBusy.after.kind !== chalkBusy.before.kind || !chalkBusy.after.active) {
+      fail(`选粉笔打断了她手上的 ${chalkBusy.before.kind}（变成了 ${chalkBusy.after.kind}）`);
+    }
+    if (chalkBusy.res && chalkBusy.res.queued !== true) fail('她忙碌时选粉笔没有走排队入口');
+    if (chalkBusy.pick || !chalkBusy.hidden) fail('忙碌状态下选完粉笔，二选一没有收掉');
+    await page.waitForFunction(() => {
+      const g = window.__board.girl;
+      return !g.active && g.assists >= 2;
+    }, null, { timeout: 15000 }).catch(() => {});
+    const settled = await page.evaluate(() => ({
+      active: window.__board.girl.active,
+      assists: window.__board.girl.assists,
+      decos: window.__board.board.decos().length
+    }));
+    if (settled.active) fail('排队中的粉笔任务一直没结束');
+    if (settled.assists < 2) fail(`先前的辅助和排队的粉笔没有各自算一次（assists=${settled.assists}）`);
+    if (settled.assists > 6) fail(`辅助次数突破了上限 6（${settled.assists}）`);
+    if (settled.decos < 1) fail('排队的粉笔没有补出装饰图案');
+  }
+  // 上限：已经用满 6 次时，递粉笔不能再开第 7 次
+  const chalkCapped = await page.evaluate(() => {
+    const b = window.__board.board, g = window.__board.girl;
+    const saved = g.CFG.maxAssists;
+    g.CFG.maxAssists = 0;
+    b.clearAll();
+    g.reset();
+    g.skipCooldown();
+    g.noteStroke(0); g.noteStroke(0); g.noteStroke(0);
+    const pick = window.__board.state().chalkPick;
+    const res = pick ? window.__board.chooseChalk(pick.a) : null;
+    const out = { res: res, active: g.active, assists: g.assists, pick: window.__board.state().chalkPick };
+    g.CFG.maxAssists = saved;
+    return out;
+  });
+  if (!chalkCapped.res || chalkCapped.res.did !== false) {
+    fail('达到辅助上限后递粉笔仍然开了第 7 次');
+  }
+  if (chalkCapped.active || chalkCapped.assists !== 0) fail('达到辅助上限后递粉笔仍然启动了辅助');
+
   // ---- 1.5 结算聚合：colorCount / fillRatio / patternCount / balance
   // 手工构造一块已知的板面，再和独立扫描对账——避免「聚合函数自己跟自己一致」。
   const agg = await page.evaluate(() => {
@@ -543,6 +627,17 @@ const OUT = path.resolve(__dirname, 'out');
   if (chairTriggered.top >= 0.5) fail(`椅子事件触发时上边框已经 ${chairTriggered.top.toFixed(2)}，不该触发`);
   await page.waitForFunction(() => window.__board.state().chair.phase === 'play', null, { timeout: 6000 });
   if (!(await page.evaluate(() => window.__board.state().locked))) fail('椅子段没有锁住玩家画笔（她站椅子上时不该还能画）');
+  // 顶边开始落笔前量一次两层墨量：画完撤销后，顶边要整段消失、玩家之前的笔画不受影响
+  const chairInkBefore = await page.evaluate(() => {
+    const ink = (layer) => {
+      const d = layer.getContext('2d').getImageData(0, 0, layer.width, layer.height).data;
+      let n = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i]) n++;
+      return n;
+    };
+    const b = window.__board.board;
+    return { player: ink(b.layers.player), assist: ink(b.layers.assist) };
+  });
   // 指针出界：只停笔，不失败、不退进度。按住 A 直到指针被压出绿区，
   // 出界之后再量进度（压出去的过程本身还在绿区里，会正常涨一点）。
   await page.keyboard.down('KeyA');
@@ -604,6 +699,36 @@ const OUT = path.resolve(__dirname, 'out');
   if (!chairLines.some((l) => chairAfter.doneLines.includes(l))) fail('椅子画完没有说那两句专属对白');
   if (chairAfter.locked) fail('椅子段结束了板面还锁着');
   if (chairAfter.pull > 0.02) fail(`椅子段结束镜头没有退回来（pull=${chairAfter.pull}）`);
+  // 她的一笔 = 一次 Ctrl+Z：顶边整段消失，玩家此前的笔画原样保留
+  const chairInkAfter = await page.evaluate(() => {
+    const ink = (layer) => {
+      const d = layer.getContext('2d').getImageData(0, 0, layer.width, layer.height).data;
+      let n = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i]) n++;
+      return n;
+    };
+    const b = window.__board.board;
+    return { player: ink(b.layers.player), assist: ink(b.layers.assist) };
+  });
+  if (chairInkAfter.assist <= chairInkBefore.assist) fail('椅子画完顶边没有落进她的图层，测不到撤销');
+  await page.evaluate(() => window.__board.board.undo());
+  await page.waitForTimeout(600);
+  const chairUndone = await page.evaluate(() => {
+    const ink = (layer) => {
+      const d = layer.getContext('2d').getImageData(0, 0, layer.width, layer.height).data;
+      let n = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i]) n++;
+      return n;
+    };
+    const b = window.__board.board;
+    return { player: ink(b.layers.player), assist: ink(b.layers.assist) };
+  });
+  if (chairUndone.assist > chairInkBefore.assist + 8) {
+    fail(`Ctrl+Z 没有把椅子顶边整段撤掉（assist ${chairInkBefore.assist} → ${chairUndone.assist}）`);
+  }
+  if (Math.abs(chairUndone.player - chairInkBefore.player) > 8) {
+    fail(`撤销椅子顶边时把玩家之前的笔画也撤了（player ${chairInkBefore.player} → ${chairUndone.player}）`);
+  }
   await page.screenshot({ path: path.join(OUT, '01b-chair.png') });
 
   // 椅子事件过后清干净，回到原来的自检路径

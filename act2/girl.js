@@ -93,6 +93,7 @@
       relay: null,          // 正在等玩家接的接力笔 { x, y, t, life, color }
       relayPlan: null,      // 刚画完的接力计划（finishAssist 里转成 relay）
       pendingChalk: null,   // 递粉笔二选一：{ a, b } 两个颜色下标
+      queuedChalk: null,    // 她手上还有一笔时，选完粉笔排在这一笔后面的任务
       chalkTask: false,     // 当前这次 deco 辅助是「用她手里那支」补的
       dur: 0,
       elapsed: 0,
@@ -519,6 +520,10 @@
       // relay 不在这里说话：接上时才有 LINES.relay 那句（没接上就安静地淡掉）
       s.chalkTask = false;
       onAssist(s.kind);
+      // 排队中的粉色任务（选粉笔时她正忙）：等这一笔自然收尾再接
+      const queued = s.queuedChalk;
+      s.queuedChalk = null;
+      if (queued && s.assists < CFG.maxAssists) startAssist(queued);
     }
 
     // ------------------------------------------------------------ 外部事件
@@ -571,7 +576,8 @@
       return true;
     }
 
-    /** 玩家选了哪支粉笔（§1.4）：她用没被选的那支去补装饰区。 */
+    /** 玩家选了哪支粉笔（§1.4）：她用没被选的那支去补装饰区。
+     *  走和普通辅助相同的入口：计入 6 次上限；她手上有笔时排队，不硬打断。 */
     function takeChalk(chosen) {
       const pending = s.pendingChalk;
       if (!pending) return null;
@@ -579,8 +585,16 @@
       const other = chosen === pending.a ? pending.b : pending.a;
       const color = board.COLORS[other] ? board.COLORS[other].hex : "#f4ecdd";
       const task = chalkDecoTask(color);
-      if (task) startAssist(task);
-      return { chosen, other, color, did: !!task };
+      if (!task) return { chosen, other, color, did: false };
+      if (s.assists >= CFG.maxAssists) {
+        return { chosen, other, color, did: false, capped: true };
+      }
+      if (s.active) {
+        s.queuedChalk = task;
+        return { chosen, other, color, did: true, queued: true };
+      }
+      startAssist(task);
+      return { chosen, other, color, did: true };
     }
 
     function noteErase() {
@@ -664,6 +678,7 @@
         if (s.relay) { s.relay = null; board.setRelayHint(null); }
         s.relayPlan = null;
         s.pendingChalk = null;
+        s.queuedChalk = null;
         if (!s.active) return;
         // 放到一半的图案别留半截：要么画完，要么撤销时跟快照一起没
         if (s.kind === "deco" && s.deco != null) board.assist.reveal(s.deco, 1);
@@ -685,6 +700,7 @@
         s.relay = null;
         s.relayPlan = null;
         s.pendingChalk = null;
+        s.queuedChalk = null;
         s.chalkTask = false;
         board.setRelayHint(null);
         s.elapsed = 0;
@@ -700,6 +716,7 @@
         s.nudgedAt = -99;
       },
       get state() { return s.state; },
+      get kind() { return s.kind; },
       get assists() { return s.assists; },
       get active() { return s.active; },
       /** 测试用：强制触发一次辅助（不管冷却） */

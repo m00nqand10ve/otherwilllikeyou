@@ -536,10 +536,8 @@
       onScene: onScene
     });
 
-    // 本场第几次游玩 → 这一轮的落点。游玩次落盘（只增不删），
-    // 首通（0）固定是楼梯口窗台，和旧版一致。
+    // 本场第几次游玩 → 这一轮的落点。计数在完成时落盘（刷新重进沿用同一轮）。
     const runs = Math.max(0, Number(D.store.searchRuns) || 0);
-    D.persist({ searchRuns: runs + 1 });
     const round = roundInfo(runs);
     const cardSpot = CARD_SPOTS[round.spotIndex];
     const hintList = HINTS.concat([round.hint3]);
@@ -1207,6 +1205,7 @@
       D.hint(null);
       D.persist({
         searchCompleted: true,
+        searchRuns: runs + 1,
         searchClues: clues.length,
         searchHints: hints,
         searchRouteSolved: routeSolved

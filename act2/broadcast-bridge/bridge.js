@@ -69,7 +69,10 @@
     const out = [["旁白", base]];
     if (boardEval && boardEval.evals.length) {
       const e = boardEval.evals[0];
-      out.push(["朱里", `${boardEval.themeName}那块板……你当时说「${e.text}」。我记得。`]);
+      // 这句评价是朱里当时在黑板前说的，不是玩家说的：引用她自己的话。
+      // 评价文本自带句号，引号内先去掉，免得出现「热闹。」。这样的双句号。
+      const said = String(e.text).replace(/[。！？!?]$/, "");
+      out.push(["朱里", `${boardEval.themeName}那块板……我当时说「${said}」来着。现在看还是对的。`]);
     } else if (boardEval) {
       out.push(["朱里", `${boardEval.themeName}那块板，我记得。`]);
     }

@@ -512,7 +512,7 @@ function checkStatic() {
   }
   // §6.8 确定性自检入口：固定步进、无渲染，正常对战仍走 rAF
   for (const w of ["window.__ball", "testRoute", "testKeeper", "testTouch", "testDash",
-                   "testSpread", "testScore", "simMode", "simSnap"]) {
+                   "testSpread", "testScore", "simMode", "simSnap", "__simTackle", "__simDuel"]) {
     if (bg.indexOf(w) < 0) fail(`G04 §6.8 缺少确定性测试入口 ${w}`);
   }
   // 不做清单：act5 不加失败态
@@ -944,6 +944,10 @@ async function runErrand(page) {
   const runNow = await page.evaluate(() => window.__daily.current.run);
   if (!runNow || runNow.n !== 0) fail(`G01 首通 run.n 不是 0：${runNow && runNow.n}`);
   if (runNow && runNow.mirror) fail("G01 首通运行时推箱镜像了");
+  const errandRunsDuring = await page.evaluate(() => window.__daily.store().errandRuns || 0);
+  if (errandRunsDuring !== 0) {
+    fail(`G01 首通还没完成就把 errandRuns 写成了 ${errandRunsDuring}（中途刷新会消耗一轮参数）`);
+  }
   const tags = await page.evaluate(() => {
     const el = document.getElementById("erTags");
     const on = el.querySelector("button.on");
@@ -1313,7 +1317,7 @@ async function runErrand(page) {
   if (done.cur) fail("搬完箱子之后小游戏还没释放");
 
   // ================= 重玩一遍（§3.1 参数种子化 + §3.2 联动正反馈） =================
-  // 首通已经存下 errandRuns=1，再进一次就是第 2 次游玩：材料洗牌、虚线框换位、
+  // 首通完成后存下 errandRuns=1，再进一次就是第 2 次游玩：材料洗牌、虚线框换位、
   // 推箱镜像到左侧楼梯口。这一遍三个人一次做对，验「只给正反馈」的联动加成。
   await page.click('#hubList li[data-id="errand"]');
   await page.waitForTimeout(1000);
@@ -1680,10 +1684,9 @@ async function runWord(page) {
   if (!panel.pick) fail("猜词面板没有线索类别选择 #wgPick");
 
   // ---- §5.5 抽题：6 题、每类 2 题、不重复、可复现 ----
-  const draw = await page.evaluate(() => {
+  const draw = await page.evaluate((seed) => {
     const W = window.DAILY.games.wordgame;
     const g = window.__daily.current;
-    const seed = window.DAILY.store.wordRuns;
     const expected = W.pickQuestions(seed).map((q) => q.id);
     const meta = g.drawn.map((q) => ({ id: q.id, cat: q.cat, fig: !!q.fig }));
     const byCat = {};
@@ -1704,10 +1707,14 @@ async function runWord(page) {
     });
     return {
       seed: seed, rounds: g.rounds, meta: meta, expected: expected,
-      byCat: byCat, npcBad: npcBad, overrides: overrides
+      byCat: byCat, npcBad: npcBad, overrides: overrides,
+      stored: window.DAILY.store.wordRuns
     };
-  });
-  if (draw.seed !== runsBefore + 1) fail(`游玩次种子没有 +1（${runsBefore} → ${draw.seed}）`);
+  }, runsBefore);
+  // 游玩次在「本场完成时」才 +1：开场就写盘的话，中途刷新会被当成下一轮
+  if (draw.seed !== runsBefore) fail(`游玩次种子应该是本场完成数 ${runsBefore}，实际 ${draw.seed}`);
+  // 没写过 wordRuns 时 store() 里就是 undefined，等价于 0 —— 不能因此在开场落一个键。
+  if ((draw.stored || 0) !== runsBefore) fail(`G03 开场就把 wordRuns 写成了 ${draw.stored}（完成前应保持 ${runsBefore}）`);
   if (draw.rounds !== 6) fail(`每轮不是 6 题，是 ${draw.rounds}`);
   if (draw.meta.length !== 6) fail(`抽到 ${draw.meta.length} 题，应该是 6 题`);
   if (new Set(draw.meta.map((m) => m.id)).size !== 6) {
@@ -2166,6 +2173,7 @@ async function drain(page, ms = 14000) {
 /** G02 第一条路：一句话都不问，直接走到楼梯口把卡捡起来。
  *  设计稿明确要求「允许提前找到物品，不能因为没听完线索就禁止拾取」。 */
 async function runSearchEarly(page) {
+  const searchRunsBefore = await page.evaluate(() => window.__daily.store().searchRuns || 0);
   await page.click('#hubList li[data-id="search"]');
   await page.waitForTimeout(1200);
   await advanceAll(page);
@@ -2183,7 +2191,11 @@ async function runSearchEarly(page) {
     };
   });
   if (firstRound.runs !== 0) fail(`G02 首通 runs 不是 0：${firstRound.runs}`);
-  if (firstRound.savedRuns !== 1) fail(`G02 首通开始后 searchRuns 没落盘：${firstRound.savedRuns}`);
+  // 游玩次在完成时才 +1：开场写盘会让「没打完刷新」消耗掉一轮参数。
+  // 没写过 searchRuns 时 store() 里就是 undefined，等价于 0。
+  if ((firstRound.savedRuns || 0) !== searchRunsBefore) {
+    fail(`G02 开场就写了 searchRuns（${searchRunsBefore} → ${firstRound.savedRuns}，完成前不该变）`);
+  }
   if (firstRound.spot.id !== "stairSill" || firstRound.spot.x !== 300) {
     fail(`G02 首通落点不是楼梯口窗台：${firstRound.spot.id} @ ${firstRound.spot.x}`);
   }
@@ -3496,11 +3508,21 @@ async function runBall(page) {
     if (!window.__ball || !window.__ball.testRoute) return null;
     const routes = [];
     for (let seed = 1; seed <= 20; seed++) routes.push(window.__ball.testRoute(seed));
+    // P1-3：一条龙不能只测最弱的中路低球。死角 / 高球按同样的 20 个种子跑一遍，
+    // 路线会像真实玩家一样抢回球权再起脚（见 ball.js simRoute 注释）。
+    const variants = {};
+    for (const v of ["corner-left", "corner-right", "high"]) {
+      variants[v] = [];
+      for (let seed = 1; seed <= 20; seed++) variants[v].push(window.__ball.testRoute(seed, v));
+    }
     const detA = JSON.stringify(window.__ball.testRoute(7));
     const detB = JSON.stringify(window.__ball.testRoute(7));
+    const detVA = JSON.stringify(window.__ball.testRoute(7, "high"));
+    const detVB = JSON.stringify(window.__ball.testRoute(7, "high"));
     return {
       routes: routes,
-      det: detA === detB,
+      variants: variants,
+      det: detA === detB && detVA === detVB,
       keeper: window.__ball.testKeeper(7),
       touch: window.__ball.testTouch(3),
       dash: window.__ball.testDash(3),
@@ -3520,6 +3542,36 @@ async function runBall(page) {
       fail(`G04 一条龙 20 个种子进了 ${goals} 球（${Math.round(goals / routes.length * 100)}%），应该 ≤30%`);
     }
     if (stuck.length) fail(`G04 一条龙自检有 ${stuck.length} 个种子 8 秒都没结果`);
+    // P1-3：死角 / 高球变体各跑 20 个种子，口径同样是进球率 ≤30%。
+    // 每个种子都必须真的完成一次射门，否则变体名存实亡（只测到了被上抢）。
+    const variantGoals = {};
+    for (const v of ["corner-left", "corner-right", "high"]) {
+      const list = sim.variants[v] || [];
+      if (list.length !== 20) fail(`G04 变体路线 ${v} 没有跑满 20 个种子`);
+      const vg = list.filter((r) => r.goal).length;
+      variantGoals[v] = vg;
+      if (vg / list.length > 0.30) {
+        fail(`G04 变体路线 ${v} 20 个种子进了 ${vg} 球（${Math.round(vg / list.length * 100)}%），应该 ≤30%`);
+      }
+      if (!list.every((r) => r.aim)) {
+        fail(`G04 变体路线 ${v} 有种子没走到射门，${v} 的球路没被真正测到`);
+      }
+      if (!list.every((r) => r.keeperSeen)) {
+        fail(`G04 变体路线 ${v} 里守门员没有每次都进入 keeper 态`);
+      }
+      const vStuck = list.filter((r) => r.result === "timeout" || r.result.indexOf("state:") === 0);
+      if (vStuck.length) fail(`G04 变体路线 ${v} 有 ${vStuck.length} 个种子 8 秒都没结果`);
+    }
+    // 变体的落点必须真的拨到死角 / 高球上，不能拨到一半就出脚。
+    if (!sim.variants["corner-left"].every((r) => r.aim && r.aim.x >= 0.35 && r.aim.x <= 0.39)) {
+      fail("G04 死角路线没有把落点拨到左侧门框内（x≈0.37）");
+    }
+    if (!sim.variants["corner-right"].every((r) => r.aim && r.aim.x >= 0.61 && r.aim.x <= 0.65)) {
+      fail("G04 死角路线没有把落点拨到右侧门框内（x≈0.63）");
+    }
+    if (!sim.variants.high.every((r) => r.aim && r.aim.z >= 0.54)) {
+      fail("G04 高球路线没有把落点抬过守门员的扑救线（z ≥ 0.54）");
+    }
     if (!sim.det) fail("G04 同一个种子跑两次结果不一致，随机没走本局种子");
     if (!routes.every((r) => r.keeperSeen)) {
       fail("G04 一条龙路线里守门员没有每次都进入 keeper 态");
@@ -3574,7 +3626,10 @@ async function runBall(page) {
       fail("G04 确定性自检往存档里写了东西");
     }
     ok(`G04 §6.8 确定性自检：一条龙 20 种子进 ${goals} 球（${Math.round(goals / routes.length * 100)}%，` +
-       `改前基线 100%）/ 守线·守门前置 / σ=0 落点严格等于瞄准点 / 触球与拨球 / 比分起伏参数，` +
+       `改前基线 100%）/ 死角左·右 ${variantGoals["corner-left"]}·${variantGoals["corner-right"]}/20、` +
+       `高球 ${variantGoals.high}/20（高球是设计正解：守门员只扑 z<0.50 的低球，` +
+       `代价是起脚前要站定拨高约 0.9 秒，上抢和封堵都在这窗口里）/ ` +
+       `守线·守门前置 / σ=0 落点严格等于瞄准点 / 触球与拨球 / 比分起伏参数，` +
        `headless ${simMs}ms`);
   }
 

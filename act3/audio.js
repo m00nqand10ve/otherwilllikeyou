@@ -49,9 +49,9 @@
     let timer = 0;
     let musicOn = true;
 
-    // 末段加速：从这里开始每一拍变短。拍号本身不变，所以鼓组的 bar 相位不变。
-    let tempoBeat = Infinity;
-    let tempoSpb = SPB;
+    // 拍 ↔ 秒的换算由谱面（chart.js）唯一提供，音频只借用。
+    // 这样末段加速的改变速点不会在两边各写一份、改一处漏一处。
+    let beatMap = null;
 
     function ensure() {
       if (ctx) return ctx;
@@ -155,30 +155,24 @@
     /**
      * 谱面末段要从 96 换到 108。拍点还是那些拍点，改的是「第几拍在音频时钟上的
      * 第几秒」。排程线程所有事件时间都走 beatTime()，所以鼓、贝斯、人声一起变速。
+     *
+     * 映射本身不在这里实现：直接接 chart 的 timeOfBeat / beatOfTime，
+     * 保证谱面和声音共用同一个分段函数。
      */
-    function setTempoChange(beat, bpm) {
-      const b = Number(beat);
-      const spb2 = 60 / Number(bpm);
-      if (!isFinite(b) || b <= 0 || !isFinite(spb2) || spb2 <= 0 || Math.abs(spb2 - SPB) < 1e-9) {
-        tempoBeat = Infinity;
-        tempoSpb = SPB;
-        return;
-      }
-      tempoBeat = b;
-      tempoSpb = spb2;
+    function setBeatMap(map) {
+      beatMap = map && typeof map.timeOfBeat === "function" && typeof map.beatOfTime === "function"
+        ? { timeOfBeat: map.timeOfBeat, beatOfTime: map.beatOfTime }
+        : null;
     }
 
     /** 第几拍 → 距第 0 秒多少秒。 */
     function beatTime(beat) {
-      if (beat <= tempoBeat) return beat * SPB;
-      return tempoBeat * SPB + (beat - tempoBeat) * tempoSpb;
+      return beatMap ? beatMap.timeOfBeat(beat) : beat * SPB;
     }
 
     /** 距第 0 秒多少秒 → 第几拍。seek 用它把播放位置对回拍点。 */
     function beatAt(t) {
-      const at = tempoBeat * SPB;
-      if (t <= at) return t / SPB;
-      return tempoBeat + (t - at) / tempoSpb;
+      return beatMap ? beatMap.beatOfTime(t) : t / SPB;
     }
 
     function setOffsetMs(ms) {
@@ -462,7 +456,7 @@
       unlock, ensure,
       now, songTime, startSong, stopSong, seek,
       setOffsetMs, offsetMs,
-      setTempoChange, beatTime, beatAt,
+      setBeatMap, beatTime, beatAt,
       blip, say, tapPaper, chime, thud, cover, click, metronome,
       setMusic,
       get ready() { return ready; },

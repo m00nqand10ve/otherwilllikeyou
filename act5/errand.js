@@ -144,10 +144,9 @@
 
     const A = { girl: trio.girl, friend: trio.friend, boy: trio.boy };
 
-    // 本场第几次游玩 → 参数组。计数落盘，重进一次就换一组；
-    // resetDaily 只删完成键，不会把这个计数删掉。
+    // 本场第几次游玩 → 参数组。计数在「本场完成时」才落盘：
+    // 中途刷新重进仍是同一轮参数（开发文档：结果卡出来前首通永远用现行参数）。
     const runs = Math.max(0, Number(D.store.errandRuns) || 0);
-    D.persist({ errandRuns: runs + 1 });
     const plan = planForRun(runs);
     const B = plan.box;
 
@@ -855,7 +854,7 @@
         ["旁白", "那天下午，我第一次觉得，这条走廊其实挺短的。"]
       ]);
       state = "done";
-      D.persist({ errandCompleted: true });
+      D.persist({ errandCompleted: true, errandRuns: runs + 1 });
       host.done({
         id: "errand",
         completed: true,

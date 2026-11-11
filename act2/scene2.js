@@ -383,6 +383,9 @@
   function chairChalkTo(k) {
     const to = clamp(k, 0, 1);
     if (to <= chair.drawnK) return;
+    // 她的一笔 = 一次 Ctrl+Z：顶边整段必须自成一个历史条目。
+    // 缺了这次快照，撤销会把这条线和玩家上一笔一起撤掉。
+    if (chair.drawnK === 0) board.assist.snapshot();
     const bx0 = board.BW * (CHAIR.span[0] + (CHAIR.span[1] - CHAIR.span[0]) * chair.drawnK);
     const bx1 = board.BW * (CHAIR.span[0] + (CHAIR.span[1] - CHAIR.span[0]) * to);
     board.assist.line([[bx0, 6], [bx1, 6]], { color: "#f4ecdd", w: 2, alpha: 0.86 });
@@ -692,7 +695,9 @@
       // 椅子事件（含等触发的那 0.9 秒）期间把她按住：否则她的常规补边框会先把
       // 顶边补掉，事件永远等不到「上边框 < 50%」这个触发条件。
       const chairBusy = chair.phase !== "off" || chair.pending > 0;
-      if (!chairBusy) girl.update(dt, { drawing: sc.drawing });
+      // 粉笔二选一打开时也把她按住：否则玩家迟迟不选，她会先接一笔，
+      // 选完那一刻那一笔被 takeChalk 打断（队列清空、历史多一条）。
+      if (!chairBusy && !sc.chalkPick) girl.update(dt, { drawing: sc.drawing });
       chatStep(dt);
       if (board.allDone() && !sc.finished) markReady();
       else sc.readyMarked = false;
@@ -1127,6 +1132,8 @@
 
   function finishBoard() {
     if (sc.state !== "board") return;
+    // 二选一还开着就按完成：先把选择收掉，别让它留到结算镜头里
+    if (sc.chalkPick) { sc.chalkPick = null; closePick(); chat.paused = false; }
     if (chair.phase !== "off") return;   // 椅子段镜头里不接完成，等它退回来
     if (!board.allDone()) {
       herSay("先把四个区都填上吧。");

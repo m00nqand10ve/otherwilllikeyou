@@ -499,10 +499,17 @@
         g.result = "miss";
       }
 
-      // 长按按到尾巴自然松开（both 的自动松手正好落在同步窗里）
+      // 长按按到尾巴自然松开。both 收尾不自动算成功：玩家一直不松手，
+      // 超过 ±200ms 同步窗后按「实际松手时刻」结算，记为晚松、不算同步。
+      // 否则按住不动必然落到 ev.time + ev.dur，高潮点没有任何张力。
       if (S.hold) {
         const n = S.hold.note;
-        if (t >= n.time + n.dur + 0.08) release(n.time + n.dur);
+        if (S.hold.both) {
+          const target = n.time + n.dur;
+          if (t >= target + SYNC.release) release(t);
+        } else if (t >= n.time + n.dur + 0.08) {
+          release(n.time + n.dur);
+        }
       }
 
       // 她提前敲稿子：连着四句以上轮到你的时候，先给你一下

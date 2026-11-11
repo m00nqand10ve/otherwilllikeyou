@@ -222,7 +222,7 @@
     noteById = new Map();
     for (const n of rhythm.mine) noteById.set(n.id, n);
     for (const n of rhythm.hers) noteById.set(n.id, n);
-    audio.setTempoChange(chart.accelBeat, chart.accelBpm);
+    audio.setBeatMap(chart);
     sc.burstToast = false;
     return chart;
   }

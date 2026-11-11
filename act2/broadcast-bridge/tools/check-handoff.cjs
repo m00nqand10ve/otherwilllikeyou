@@ -95,7 +95,9 @@ async function collectLines(page) {
     const echoLines = await collectLines(page);
     const echo = echoLines.join(" / ");
     if (!echo.includes("读书周")) fail(`广播桥开场没有引用第二幕主题：${echo}`);
-    if (!echo.includes(evalPayload.evals[0].text)) fail(`广播桥开场没有引用第二幕的结算评价句：${echo}`);
+    // 引用句会包在「」里再接「来着。」——句末标点先去掉，免得出现「……。」来着。
+    const quoted = evalPayload.evals[0].text.replace(/[。！？!?]$/, "");
+    if (!echo.includes(quoted)) fail(`广播桥开场没有引用第二幕的结算评价句：${echo}`);
 
     // ---- §1.6 风吹稿纸：进入走廊分镜，走到中段触发
     await page.evaluate(() => window.__broadcastBridge.enter("corridor"));

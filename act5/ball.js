@@ -2440,6 +2440,10 @@
       __simSnap: simSnap,
       __simEnd: simEnd,
       __simLanding: simLanding,
+      // 一条龙自检的变体路线需要复刻真实玩法里的「按 E 起抢断圈、打她没护住的一边」，
+      // 否则开局就被上抢断掉，永远走不到射门那一步。
+      __simTackle: playerTackle,
+      __simDuel: resolveDuel,
       __simSetSpread: function (v) { spreadScale = v == null ? 1 : v; },
       __simSigma: simSigma,
       __simScore: simSetScore,
@@ -2463,15 +2467,25 @@
     return g;
   }
 
-  /** 「开球后直线带球 + 满力射门」的一条龙路线：AI 由种子驱动，玩家侧用脚本输入。
+  /** 「开球后带球 + 射门」的一条龙路线：AI 由种子驱动，玩家侧用脚本输入。
+   *  variant: "straight"（默认，中路满力，开球后一次持球直冲——测的是「电脑上抢能堵死一条龙」）
+   *         | "corner-left" / "corner-right"（打死角）| "high"（高球，越过守门员扑救高度）。
+   *  变体路线会像真实玩家一样，被断走后追上去按 E 起抢断圈、打对手没护住的一边抢回来，
+   *  再用抢断后的 2.2 / 2.4 秒反抢保护窗口站定蓄力——否则永远走不到起脚那一步。
    *  返回这一脚的结果（goal / save / block / post / miss / high / lost / timeout）。 */
-  function simRoute(seed) {
+  function simRoute(seed, variant) {
+    const mode = variant || "straight";
     const g = makeSim(seed, { spreadScale: 1, kick: "me" });
     const out = {
-      seed: seed, result: "timeout", goal: false, steps: 0,
+      seed: seed, mode: mode, result: "timeout", goal: false, steps: 0,
       keeperSeen: false, keeperAt: null, landing: null, aim: null,
       power: null, shotAtD: null, meD: 0, stats: null
     };
+    const aimTargetX = mode === "corner-left" ? 0.37 : mode === "corner-right" ? 0.63 : null;
+    const aimTargetZ = mode === "high" ? 0.56 : null;
+    // 直线路线沿用原来的 0.82；变体按 playall 通关机器人的 0.84 起脚。
+    // 起脚后不再等满力：死角 / 高球要花时间拨角度，等满力反而给上抢多留了时间。
+    const chargeD = mode === "straight" ? 0.82 : 0.84;
     let t = 0;
     let phase = "dribble";
     while (t < 8) {
@@ -2491,6 +2505,7 @@
         out.aim = s.lastShot.aim ? { x: s.lastShot.aim.x, z: s.lastShot.aim.z } : null;
         out.power = s.lastShot.power;
         if (out.shotAtD == null) out.shotAtD = s.lastShot.d0;
+        if (s.lastShot.by) out.by = s.lastShot.by;
       }
       if (phase === "flight") {
         if (s.lastShot && s.lastShot.result !== "flying") {
@@ -2499,21 +2514,56 @@
         }
         g.__simStep(SIM_DT, {});
       } else if (s.holder !== "me") {
-        out.result = "lost";
-        break;
+        if (mode === "straight") { out.result = "lost"; break; }
+        // 变体路线：被断走后先抢回来（真实玩法就是按 E 起抢断圈、打她没护住的一边）。
+        // 抢回来的一瞬间有 2.2 / 2.4 秒反抢保护，那才是能站定蓄力的窗口；
+        // 只靠开球那一次持球，永远走不到 0.84 起脚。
+        if (g.duel) {
+          g.__simDuel(g.duelGuard === "up" ? "down" : "up");
+          g.__simStep(SIM_DT, {});
+        } else {
+          const tgt = s.holder === "yuno" ? s.yuno : s.holder === "jurie" ? s.jurie : s.ball;
+          const keys = {};
+          if (tgt.x < s.me.x - 0.008) keys.left = true;
+          else if (tgt.x > s.me.x + 0.008) keys.right = true;
+          if (tgt.d > s.me.d + 0.008) keys.up = true;
+          else if (tgt.d < s.me.d - 0.008) keys.down = true;
+          if (!(g.stumbleT > 0)) g.__simTackle();
+          g.__simStep(SIM_DT, keys);
+        }
       } else if (phase === "dribble") {
-        if (s.me.d >= 0.82) {
+        if (s.me.d >= chargeD) {
           phase = "charge";
           g.__simStep(SIM_DT, {});
         } else {
           g.__simStep(SIM_DT, { up: true });
         }
       } else if (phase === "charge") {
-        if (!s.charging) g.__simStep(SIM_DT, { space: true });
-        else if (s.chargeT >= CFG.chargeTime - 1e-9) {
-          g.__simStep(SIM_DT, { space: false });
-          phase = "flight";
-        } else g.__simStep(SIM_DT, { space: true });
+        if (!s.charging) {
+          g.__simStep(SIM_DT, { space: true });
+        } else {
+          const keys = { space: true };
+          let aimed = true;
+          if (aimTargetX != null) {
+            // 起脚时对准门中间，蓄力期间用 A/D 把落点拨到死角
+            if (s.aimX > aimTargetX + 0.004) { keys.left = true; aimed = false; }
+            else if (s.aimX < aimTargetX - 0.004) { keys.right = true; aimed = false; }
+          }
+          if (aimTargetZ != null) {
+            // 高球是设计上的正解（守门员只扑 z < 0.50 的低球）；代价是从 aimZ 0.16
+            // 拨到 0.54 要站定约 0.9 秒，上抢和封堵都在这个窗口里。
+            if (s.aimZ < aimTargetZ - 0.004) { keys.up = true; aimed = false; }
+          }
+          const charged = mode === "straight"
+            ? s.chargeT >= CFG.chargeTime - 1e-9
+            : s.power >= 0.45;
+          if (charged && aimed) {
+            g.__simStep(SIM_DT, { space: false });
+            phase = "flight";
+          } else {
+            g.__simStep(SIM_DT, keys);
+          }
+        }
       } else {
         g.__simStep(SIM_DT, {});
       }
