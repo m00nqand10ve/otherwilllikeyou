@@ -100,9 +100,14 @@
     return true;
   }
   function lines(items, done) {
+    if (window.BGM) BGM.duck(0.55, 400);
     let i = 0;
     const next = () => {
-      if (i >= items.length) { done && done(); return; }
+      if (i >= items.length) {
+        if (window.BGM) BGM.unduck(700);
+        done && done();
+        return;
+      }
       const [who, text] = items[i++];
       say(who, text, next);
     };
@@ -208,6 +213,7 @@
    * 对话框等于把作品盖住。两个人站在画布下面说话，板子一直是完整的。
    */
   function talkLines(items, done) {
+    if (window.BGM) BGM.duck(0.55, 400);
     chat.on = true;
     chat.manual = true;
     chat.paused = false;
@@ -226,6 +232,7 @@
       chat.after = null;
       chat.on = false;
       subsHide();
+      if (window.BGM) BGM.unduck(700);
       if (fn) fn();
       return;
     }
@@ -1475,6 +1482,7 @@
   loadAll().then(() => {
     buildUI();
     el("loading").classList.remove("show");
+    if (window.BGM) BGM.play("morning", { fade: 1.6 });
 
     // 前一天在护栏边约好，第二天来到走廊宣传栏旁。
     lines([

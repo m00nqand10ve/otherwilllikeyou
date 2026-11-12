@@ -11,6 +11,7 @@ ref/
 **/previews/
 **/tools/out/
 **/out/
+act5/narrative/tools/*.png
 
 # Python
 __pycache__/

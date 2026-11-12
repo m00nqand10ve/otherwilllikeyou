@@ -14,7 +14,7 @@ const { chromium } = require(path.resolve(__dirname, "../../game/dust-corridor/n
 
 const DIR = path.resolve(__dirname, "..");
 const OUT = path.join(__dirname, "out");
-const PAGE = "file:///" + path.join(DIR, "daily.html").replace(/\\/g, "/") + "?fresh=" + Date.now();
+const PAGE = "file:///" + path.join(DIR, "daily.html").replace(/\\/g, "/") + "?fresh=" + Date.now() + "&auto=1";
 
 const S = (page) => page.evaluate(() => {
   const g = window.__daily.current;

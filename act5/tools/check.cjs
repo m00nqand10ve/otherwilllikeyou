@@ -1,11 +1,18 @@
 /* 第三幕 · 校园日常 — 自检
  *
  * 前半是静态检查：资源尺寸、题库自洽、场景连线对称、线索分类齐全、文案不越界。
- * 后半开浏览器把四个小游戏各走一遍，断言状态机、存档和画面几何。
+ * 后半开浏览器把六个日常各走一遍，断言状态机、存档和画面几何。
  * 《校园寻物》走两遍：一遍一句话不问直接找到（设计稿要求允许），一遍看全了再找。
  *
+ * 第三幕现在是「自由走动」章节壳（shell.js + shared/campus-route.js）：
+ *   默认进入不开目录，WASD 在五个校园区域间走动，走到下一件事的区域按 E 开演；
+ *   目录（?hub=1）只是调试层，列表不响应点击；?auto=1 才是自动时间线。
+ *   所以导航改成：校园走动 + E 进 G01，其余用 __daily.play(id) 直接开演；
+ *   每场结束不再等目录弹出，而是等 __daily.current 释放且 busy 落下。
+ *   六个全部完成后章节壳会跳转 narrative/index.html?phase=after，单独断言。
+ *
  * 用法：node act5/tools/check.cjs
- * 截图落在 act5/tools/out/。
+ * 截图落在 act5/tools/shots/。
  */
 const fs = require("fs");
 const path = require("path");
@@ -13,13 +20,18 @@ const { chromium } = require(path.resolve(__dirname, "../../game/dust-corridor/n
 
 const ROOT = path.resolve(__dirname, "../..");
 const DIR = path.join(ROOT, "act5");
-const OUT = path.join(__dirname, "out");
-const PAGE = "file:///" + path.join(DIR, "daily.html").replace(/\\/g, "/") + "?hub=1&fresh=" + Date.now();
+const OUT = path.join(__dirname, "shots");
+const PAGE = "file:///" + path.join(DIR, "daily.html").replace(/\\/g, "/");
+const PAGE_HUB = PAGE + "?hub=1";
+const PAGE_AUTO = PAGE + "?auto=1";
 
 const fails = [];
 const oks = [];
 const fail = (m) => fails.push(m);
 const ok = (m) => oks.push(m);
+// 进度打到 stderr：整份报告是跑完才一次性 console.log 的，
+// 没有阶段标记的话，卡住和「球赛本来就慢」从日志上分不出来。
+const stage = (m) => console.error(`[stage ${new Date().toISOString().slice(11, 19)}] ${m}`);
 
 function read(f) { return fs.readFileSync(path.join(DIR, f), "utf8"); }
 
@@ -667,6 +679,30 @@ function checkStatic() {
     fail("G04 的 F 改到了球权或比分，它应该只是让人接话");
   }
 
+  // 1.18 校园自由走动壳：默认进来是手动走动（auto!==1），事件由走到对应区域按 E 触发，
+  //      目录只在 ?hub=1 时压出来；全部做完直接跳 narrative 收尾。
+  if (!/MANUAL_HUB\s*=\s*new URLSearchParams\(location\.search\)\.get\("auto"\)\s*!==\s*"1"/.test(shell)) {
+    fail("shell.js 的默认模式不是手动自由走动（auto=1 才是自动时间线）");
+  }
+  if (shell.indexOf("new CampusRoute(") < 0) fail("shell.js 没有用 CampusRoute 做跨场景走动");
+  for (const token of ["eventArea", "campusTargets", "nearCampusTarget", "campusNarration"]) {
+    if (shell.indexOf(token) < 0) fail(`shell.js 缺少自由走动结构 ${token}`);
+  }
+  if (shell.indexOf("narrative/index.html?phase=after") < 0) {
+    fail("shell.js 全部日常做完后没有跳 narrative 收尾");
+  }
+  const campusFile = path.join(ROOT, "shared/campus-route.js");
+  if (!fs.existsSync(campusFile)) fail("缺少 shared/campus-route.js");
+  else {
+    const cr = fs.readFileSync(campusFile, "utf8");
+    if (/^\s*(import|export)\s/m.test(cr)) fail("campus-route.js 用了 ES module 语法，file:// 下会挂");
+    if (cr.indexOf("window.CampusRoute") < 0) fail("campus-route.js 没有挂 window.CampusRoute");
+  }
+  if (html.indexOf("../shared/campus-route.js") < 0) fail("daily.html 没有引 shared/campus-route.js");
+  for (const id of ["campusNarration", "hubStart", "hubReset", "afterStoryHub"]) {
+    if (html.indexOf('id="' + id + '"') < 0) fail(`daily.html 缺少 #${id}`);
+  }
+
   ok(`静态：男 ${frames.boy} / 女 ${frames.girl} / 由乃 ${frames.friend} 帧、题库 ${answers.length} 题、` +
      `场景 G01 ${Object.keys(scenes).length} 个（一个场景 + 三个站位）/ G02 ${Object.keys(searchScenes).length} 个、` +
      `G01 三个可重来的操作、` +
@@ -892,8 +928,192 @@ async function drainToGiveBack(page, ms = 12000) {
   return false;
 }
 
+// ---------------------------------------------------------------- 校园壳导航
+
+/** 读目录 / 自由走动壳的状态。新目录的 li 没有点击事件，
+ *  事件只能靠「走到区域按 E」、hubStart（贴近时可点）或 __daily.play 进。 */
+const hubState = (page) => page.evaluate(() => {
+  const items = [...document.querySelectorAll("#hubList li")].map((li) => ({
+    id: li.dataset.id, cls: li.className,
+    day: li.querySelector(".day").textContent,
+    name: li.querySelector(".name").textContent,
+    tag: li.querySelector(".tag").textContent
+  }));
+  const start = document.getElementById("hubStart");
+  return {
+    chapter: document.getElementById("chapter").textContent,
+    narration: document.getElementById("campusNarration").hidden
+      ? null : document.getElementById("campusNarration").textContent,
+    hubHidden: document.getElementById("hub").hidden,
+    hubShow: document.getElementById("hub").classList.contains("show"),
+    startDisabled: start.disabled,
+    startText: start.textContent,
+    items: items,
+    playable: items.filter((i) => i.cls === "playable").length,
+    locked: items.filter((i) => i.cls === "locked").length,
+    done: items.filter((i) => i.cls === "done").length,
+    afterStoryHub: !document.getElementById("afterStoryHub").hidden,
+    over: !window.__daily.current && !window.__daily.busy
+  };
+});
+
+/** 用调试口进事件（等价于走到区域按 E）。等小游戏真正挂上来。
+ *  注意：play() 返回的是整场演完才 resolve 的 Promise，evaluate 不能把它 return 出去，
+ *  否则 Playwright 会一直等这场演完——而这场正等着脚本操作，死锁。 */
+async function startEvent(page, playId, gameId, ms = 12000) {
+  await page.evaluate((id) => { window.__daily.play(id); }, playId);
+  await page.waitForFunction((want) => {
+    const g = window.__daily.current;
+    return !!g && g.id === want;
+  }, gameId, { timeout: ms }).catch(() => {});
+  const id = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return g ? g.id : null;
+  });
+  if (id !== gameId) fail(`__daily.play("${playId}") 进的不是 ${gameId}，是 ${id}`);
+  return id === gameId;
+}
+
+/** 等一场事件彻底结束：小游戏释放 + 壳的淡出 / 日期卡都走完（busy 落回 false）。 */
+async function waitEventOver(page, ms = 25000) {
+  await page.waitForFunction(() => !window.__daily.current && !window.__daily.busy,
+    null, { timeout: ms }).catch(() => {});
+  return page.evaluate(() => !window.__daily.current && !window.__daily.busy);
+}
+
+/** 用 E 把结尾对白读完，直到事件彻底结束。collect 传入数组时顺手记下每句「谁：台词」。 */
+async function drainToEnd(page, ms = 25000, collect = null) {
+  const t0 = Date.now();
+  let lastLine = null;
+  while (Date.now() - t0 < ms) {
+    const st = await page.evaluate(() => ({
+      dlg: window.DAILY.dialogOpen(),
+      who: document.getElementById("who").textContent,
+      line: document.getElementById("line").textContent,
+      over: !window.__daily.current && !window.__daily.busy
+    }));
+    if (st.over) return true;
+    if (st.dlg) {
+      if (collect && st.line && st.line !== lastLine) {
+        collect.push(st.who + "：" + st.line);
+        lastLine = st.line;
+      }
+      await page.keyboard.press("KeyE");
+    }
+    await page.waitForTimeout(90);
+  }
+  return false;
+}
+
+/** 把开场对白一路读到做事阶段。G01 开场是「淡入 680ms → 8 句 → 走位 0.9s → 3 句 → work」，
+ *  两段对白被走位动画隔开：固定 sleep + advanceAll 很容易在走位那段提前返回，漏掉第二段。
+ *  这里轮询：有对白就按 E，没对白就等，直到 state===work，不靠猜时间。 */
+async function advanceToWork(page, ms = 12000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    const st = await page.evaluate(() => {
+      const g = window.__daily.current;
+      return { state: g ? g.state : null, dlg: window.DAILY.dialogOpen() };
+    });
+    if (st.state === "work") return true;
+    if (st.dlg) await page.keyboard.press("KeyE");
+    await page.waitForTimeout(90);
+  }
+  return false;
+}
+
+/** 按住方向键直到壳状态满足条件（换场景 / 贴近目标），超时松手返回 false。 */
+async function campusHold(page, key, want, ms = 6000) {
+  await page.keyboard.down(key);
+  const t0 = Date.now();
+  let hit = false;
+  while (Date.now() - t0 < ms) {
+    await page.waitForTimeout(60);
+    if (want(await hubState(page))) { hit = true; break; }
+  }
+  await page.keyboard.up(key);
+  return hit;
+}
+
+/** 默认进入（不带参数）就是校园自由走动：WASD 四向走、左右边缘换场景、
+ *  走到事件区域按 E 开场。这一段的结尾已经把 G01 开起来了。 */
+async function runCampus(page) {
+  await page.waitForFunction(() => window.__daily && window.__daily.events, null, { timeout: 30000 });
+  // showHub 跑完才会把旁白露出来；等资源加载 + 开场淡入都结束，别按固定 sleep 猜。
+  await page.waitForFunction(() => !document.getElementById("campusNarration").hidden,
+    null, { timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(500);
+
+  let st = await hubState(page);
+  if (st.chapter.indexOf("四班门口") < 0) fail(`开局不在四班门口（${st.chapter}）`);
+  if (!st.hubHidden) fail("默认自由走动不该压出调试目录（?hub=1 才压）");
+  if (!st.narration || st.narration.indexOf("公告栏") < 0) {
+    fail(`开局旁白没指向公告栏（${st.narration}）`);
+  }
+  if (!st.startDisabled) fail("开局离公告栏还远，「按 E」按钮不该能点");
+  if (st.startText.indexOf("公告栏") < 0) fail(`开局按钮文案是「${st.startText}」`);
+  if (st.playable !== 1 || st.locked !== 5 || st.done !== 0) {
+    fail(`新存档目录应该是 1 可玩 / 5 锁定 / 0 完成，实际 ${st.playable}/${st.locked}/${st.done}`);
+  }
+  if (!st.items.length || st.items[0].id !== "errand" || st.items[0].cls !== "playable") {
+    fail("目录第一项应该是可玩的 errand");
+  }
+  if (st.afterStoryHub) fail("没做完日常不该出现收尾入口");
+  await page.screenshot({ path: path.join(OUT, "c0-campus-start.png") });
+
+  // 右边缘换场景：四班门口 → 公告栏
+  let moved = await campusHold(page, "ArrowRight", (s) => s.chapter.indexOf("公告栏") >= 0);
+  if (!moved) fail("按住 → 没有从四班门口跨到公告栏");
+  // 左边缘换回来：公告栏 → 四班门口
+  moved = await campusHold(page, "KeyA", (s) => s.chapter.indexOf("四班门口") >= 0);
+  if (!moved) fail("按住 A 没有从公告栏跨回四班门口");
+  // 再往右进公告栏后一直按住：朱里 / 由乃站在目标旁会挡住去路。
+  // 没有这层阻挡的话 3.6 秒足够从 x=6 冲到右边缘跨进楼梯口。
+  moved = await campusHold(page, "KeyD", (s) => s.chapter.indexOf("公告栏") >= 0);
+  if (!moved) fail("第二次往右没有跨到公告栏");
+  await page.keyboard.down("KeyD");
+  await page.waitForTimeout(3600);
+  await page.keyboard.up("KeyD");
+  st = await hubState(page);
+  if (st.chapter.indexOf("公告栏") < 0) {
+    fail(`公告栏里站着人却没挡住去路，走到了「${st.chapter}」`);
+  }
+  await page.screenshot({ path: path.join(OUT, "c1-campus-board.png") });
+
+  // 纵深轴：W 往远处走（y<214 不算贴近），这时按 E 不该开演；S 走回近处才开演。
+  // 注意：hubStart.disabled 只在换场景时刷新（shell.js renderHub←showHub←换场景），
+  // 同一场景内走动不刷新，所以「贴没贴近」要用 E 的实际行为验，不能读那个按钮。
+  await page.keyboard.down("KeyW");
+  await page.waitForTimeout(650);
+  await page.keyboard.up("KeyW");
+  await page.keyboard.press("KeyE");
+  await page.waitForTimeout(400);
+  const farCur = await page.evaluate(() => window.__daily.current && window.__daily.current.id);
+  if (farCur) fail(`W 走到远处（y<214）按 E 居然开演了（${farCur}）`);
+  await page.keyboard.down("KeyS");
+  await page.waitForTimeout(650);
+  await page.keyboard.up("KeyS");
+
+  // 贴近目标按 E → 进 G01
+  await page.keyboard.press("KeyE");
+  await page.waitForFunction(() => {
+    const g = window.__daily.current;
+    return !!g && g.id === "errand";
+  }, null, { timeout: 8000 }).catch(() => {});
+  const started = await page.evaluate(() => {
+    const g = window.__daily.current;
+    return g ? g.id : null;
+  });
+  if (started !== "errand") fail(`在公告栏按 E 进的是 ${started}，应该是 errand`);
+  ok("校园自由走动：左右边缘换场景、人物挡路贴近目标、W/S 纵深门槛、按 E 进事件");
+}
+
 async function runErrand(page) {
-  await page.click('#hubList li[data-id="errand"]');
+  // G01 已由 runCampus 走到公告栏按 E 触发，这里只等它挂上来。
+  await page.waitForFunction(() => {
+    const g = window.__daily.current;
+    return !!g && g.id === "errand";
+  }, null, { timeout: 8000 }).catch(() => {});
   await page.waitForTimeout(1100);
   let s = await S(page);
   if (s.state !== "intro") fail(`进「一起去办事」后状态是 ${s.state}`);
@@ -909,10 +1129,9 @@ async function runErrand(page) {
   const during = (await S(page)).boy;
   if (Math.abs(during - before) > 1) fail("对白打开的时候人物还能走");
 
-  await advanceAll(page);
-  await page.waitForTimeout(1500);   // walkToStations
-  await advanceAll(page);
-  await page.waitForTimeout(500);
+  if (!(await advanceToWork(page))) {
+    fail(`开场对白没读到做事阶段（state=${(await S(page)).state}）`);
+  }
 
   s = await S(page);
   if (s.state !== "work") fail(`开场对白读完之后状态是 ${s.state}，应该是 work`);
@@ -1296,35 +1515,48 @@ async function runErrand(page) {
   if (!tagsEnd) fail("结尾了换人条还挂着");
   await page.screenshot({ path: path.join(OUT, "d6-end.png") });
 
+  // 首通做完 → 壳切日期卡（周二）→ 回到自由走动。默认模式不压目录。
+  let dayShot = false;
+  let over = false;
   const tEnd = Date.now();
-  while (Date.now() - tEnd < 12000) {
+  while (Date.now() - tEnd < 20000) {
     const st = await page.evaluate(() => ({
       dlg: window.DAILY.dialogOpen(),
-      hub: document.getElementById("hub").classList.contains("show")
+      day: document.getElementById("dayCard").hidden
+        ? null : document.getElementById("dayName").textContent,
+      over: !window.__daily.current && !window.__daily.busy
     }));
-    if (st.hub) break;
+    if (st.day && !dayShot) {
+      dayShot = true;
+      if (st.day !== "周二") fail(`G01 做完后的日期卡是「${st.day}」，应该是周二`);
+      await page.waitForTimeout(340);   // 等日期卡淡入完再拍
+      await page.screenshot({ path: path.join(OUT, "d6b-day-tue.png") });
+    }
+    if (st.over) { over = true; break; }
     if (st.dlg) await page.keyboard.press("KeyE");
-    await page.waitForTimeout(120);
+    await page.waitForTimeout(100);
   }
+  if (!over) fail("G01 首通结束后壳没有回到自由走动（busy 一直没落）");
+  if (!dayShot) fail("G01 首通做完后没有切周二的日期卡");
 
   const done = await page.evaluate(() => ({
-    hub: document.getElementById("hub").classList.contains("show"),
     saved: window.__daily.store().errandCompleted === true,
-    cur: !!window.__daily.current
+    cur: !!window.__daily.current,
+    hubHidden: document.getElementById("hub").hidden
   }));
-  if (!done.hub) fail("搬完箱子没有回到目录");
   if (!done.saved) fail("搬完箱子没有存下 errandCompleted");
   if (done.cur) fail("搬完箱子之后小游戏还没释放");
+  if (!done.hubHidden) fail("默认自由走动模式不该压出调试目录");
 
   // ================= 重玩一遍（§3.1 参数种子化 + §3.2 联动正反馈） =================
   // 首通完成后存下 errandRuns=1，再进一次就是第 2 次游玩：材料洗牌、虚线框换位、
   // 推箱镜像到左侧楼梯口。这一遍三个人一次做对，验「只给正反馈」的联动加成。
-  await page.click('#hubList li[data-id="errand"]');
-  await page.waitForTimeout(1000);
-  await advanceAll(page);
-  await page.waitForTimeout(1500);
-  await advanceAll(page);
-  await page.waitForTimeout(500);
+  // 重访已完成的 G01 走调试口：此时按 E 只会进「下一个没做完的」（周二朱里）。
+  await startEvent(page, "errand", "errand");
+  if (!(await advanceToWork(page))) {
+    const r0 = await S(page);
+    fail(`G01 重玩开场对白没读到做事阶段（state=${r0.state}）`);
+  }
   let r = await S(page);
   if (r.state !== "work") fail(`G01 重玩时状态是 ${r.state}，应该是 work`);
   const plan1 = await page.evaluate(() => {
@@ -1478,22 +1710,12 @@ async function runErrand(page) {
     dlg: window.DAILY.dialogOpen(), state: window.__daily.current.state
   }));
   if (!rEnd.dlg || rEnd.state !== "handover") fail(`G01 重玩：收尾没进 handover 对白（${rEnd.state}）`);
-  const rT = Date.now();
-  while (Date.now() - rT < 15000) {
-    const st = await page.evaluate(() => ({
-      dlg: window.DAILY.dialogOpen(),
-      hub: document.getElementById("hub").classList.contains("show")
-    }));
-    if (st.hub) break;
-    if (st.dlg) await page.keyboard.press("KeyE");
-    await page.waitForTimeout(120);
-  }
+  const rOver = await drainToEnd(page, 20000);
+  if (!rOver) fail("G01 重玩：结束后壳没有回到自由走动");
   const rDone = await page.evaluate(() => ({
-    hub: document.getElementById("hub").classList.contains("show"),
     runs: window.__daily.store().errandRuns,
     saved: window.__daily.store().errandCompleted === true
   }));
-  if (!rDone.hub) fail("G01 重玩：结束没回目录");
   if (rDone.runs !== 2) fail(`G01 重玩：errandRuns 应该是 2，实际 ${rDone.runs}`);
   if (!rDone.saved) fail("G01 重玩：errandCompleted 没保留");
   ok("G01 重玩：参数种子化（材料/框位/镜像路线）与联动加成（通知更稳、抬箱 sway×0.7）都生效");
@@ -1515,9 +1737,20 @@ async function drainToSoloChoice(page, ms = 12000) {
   return false;
 }
 
-async function runSolo(page, id, want) {
-  await page.click(`#hubList li[data-id="${id}"]`);
-  await page.waitForTimeout(1100);
+async function runSolo(page, id, want, viaE) {
+  if (viaE) {
+    // 上一段做完人没挪窝，仍站在公告栏目标旁：按 E 直接进下一个未完成的日常。
+    await page.keyboard.press("KeyE");
+    await page.waitForFunction((wantId) => {
+      const g = window.__daily.current;
+      return !!g && g.id === wantId;
+    }, "solo_" + id, { timeout: 8000 }).catch(() => {});
+    const got = await page.evaluate(() => window.__daily.current && window.__daily.current.id);
+    if (got !== "solo_" + id) fail(`${id}：在目标旁按 E 进的是 ${got}`);
+  } else {
+    await startEvent(page, id, "solo_" + id);
+  }
+  await page.waitForTimeout(700);
   let s = await S(page);
   if (s.state !== "intro") fail(`${id}：进场状态是 ${s.state}`);
   await advanceAll(page);
@@ -1564,16 +1797,8 @@ async function runSolo(page, id, want) {
   await page.screenshot({ path: path.join(OUT, `e2-${id}-choice.png`) });
   await page.click("#soloChoiceBtns button:nth-child(2)");
 
-  const t0 = Date.now();
-  while (Date.now() - t0 < 20000) {
-    const st = await page.evaluate(() => ({
-      hub: document.getElementById("hub").classList.contains("show"),
-      dlg: window.DAILY.dialogOpen()
-    }));
-    if (st.hub) break;
-    if (st.dlg) await page.keyboard.press("KeyE");
-    await page.waitForTimeout(110);
-  }
+  const over = await drainToEnd(page, 20000);
+  if (!over) fail(`${id}：结束后壳没有回到自由走动`);
 
   const st = await page.evaluate(() => ({
     store: window.__daily.store(),
@@ -1583,7 +1808,7 @@ async function runSolo(page, id, want) {
   if (st.store[want.reply] !== want.value) {
     fail(`${id}：选第二项后 ${want.reply} 是 ${st.store[want.reply]}，应该是 ${want.value}`);
   }
-  if (!st.box) fail(`${id}：回到目录后选择面板还挂着`);
+  if (!st.box) fail(`${id}：结束后选择面板还挂着`);
   ok(`${id}：双轴走位、走近说话、选择与存档都成立`);
 }
 
@@ -1666,7 +1891,7 @@ async function runWord(page) {
   };
 
   const runsBefore = await page.evaluate(() => window.__daily.store().wordRuns || 0);
-  await page.click('#hubList li[data-id="word"]');
+  await startEvent(page, "word", "word_guess");
   await page.waitForFunction(() => !document.getElementById("wg").hidden, null, { timeout: 15000 });
   await page.waitForTimeout(300);
 
@@ -2127,55 +2352,56 @@ async function runWord(page) {
   await page.waitForFunction(() => document.getElementById("wg").hidden, null, { timeout: 25000 })
     .catch(() => fail("两轮出题之后猜词面板没有关掉"));
 
-  // ---- 收尾：对白读完回目录，存档正确 ----
+  // ---- 收尾：G03 是最后一场。对白读完 → 壳直接跳 narrative 收尾，不再回目录。 ----
   const tEnd = Date.now();
-  while (Date.now() - tEnd < 20000) {
-    const stt = await page.evaluate(() => ({
-      hub: document.getElementById("hub").classList.contains("show"),
-      dlg: window.DAILY.dialogOpen()
-    }));
-    if (stt.hub) break;
-    if (stt.dlg) await page.keyboard.press("KeyE");
+  let navigated = false;
+  while (Date.now() - tEnd < 25000) {
+    try {
+      const stt = await page.evaluate(() => ({
+        url: location.href,
+        dlg: window.DAILY ? window.DAILY.dialogOpen() : false
+      }));
+      if (stt.url.indexOf("narrative/index.html") >= 0) { navigated = true; break; }
+      if (stt.dlg) await page.keyboard.press("KeyE");
+    } catch (e) {
+      // G03 是最后一场：读完对白壳就 location.href 跳 narrative，
+      // 正好把这一帧的执行上下文销毁。这不是故障，等导航落定再读 URL。
+      if (page.url().indexOf("narrative/index.html") >= 0) { navigated = true; break; }
+    }
     await page.waitForTimeout(120);
   }
-  const done = await page.evaluate(() => ({
-    hub: document.getElementById("hub").classList.contains("show"),
-    saved: window.__daily.store().wordGameCompleted === true,
-    correct: window.__daily.store().wordGameCorrect,
-    hints: window.__daily.store().wordGameHints,
-    runs: window.__daily.store().wordRuns
-  }));
-  if (!done.hub) fail("猜词结束没有回到目录");
+  if (!navigated) fail("猜词（最后一场）结束后没有跳 narrative 收尾");
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
+  // file:// 同源，localStorage 在 narrative 页上照样读得到
+  const done = await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem("our-story-act5-daily-v1") || "{}");
+    return {
+      url: location.href,
+      saved: s.wordGameCompleted === true,
+      correct: s.wordGameCorrect,
+      hints: s.wordGameHints,
+      runs: s.wordRuns,
+      chapterDone: s.chapterDailyDone === true
+    };
+  });
+  if (done.url.indexOf("phase=after") < 0) fail(`收尾跳转的地址是 ${done.url}`);
   if (!done.saved) fail("猜词结束没有存下 wordGameCompleted");
   if (done.correct !== 5) fail(`存档 wordGameCorrect 是 ${done.correct}，应该是 5（6 题里错 1 题）`);
   if (done.hints !== 1) fail(`存档 wordGameHints 是 ${done.hints}，应该是 1`);
   if (done.runs !== runsBefore + 1) fail(`游玩次 wordRuns 是 ${done.runs}，应该是 ${runsBefore + 1}`);
-  else ok("G03 收尾回目录：wordGameCompleted / correct=5 / hints=1 / wordRuns+1 都对");
+  if (!done.chapterDone) fail("全部日常做完没有存下 chapterDailyDone");
+  else ok("G03 收尾跳 narrative：wordGameCompleted / correct=5 / hints=1 / wordRuns+1 / chapterDailyDone 都对");
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: path.join(OUT, "d6f-narrative.png") });
   return done;
-}
-
-/** 一直读到目录重新出现。用于收尾那段——中间隔着两次淡入淡出，
- *  不能靠固定 sleep 猜时间。只在真的有对白的时候按 E，否则会误触发互动点。 */
-async function drain(page, ms = 14000) {
-  const t0 = Date.now();
-  while (Date.now() - t0 < ms) {
-    if (await page.evaluate(() => document.getElementById("hub").classList.contains("show"))) return true;
-    if (await page.evaluate(() => window.DAILY.dialogOpen())) {
-      await page.keyboard.press("KeyE");
-      await page.waitForTimeout(90);
-    } else {
-      await page.waitForTimeout(150);
-    }
-  }
-  return false;
 }
 
 /** G02 第一条路：一句话都不问，直接走到楼梯口把卡捡起来。
  *  设计稿明确要求「允许提前找到物品，不能因为没听完线索就禁止拾取」。 */
 async function runSearchEarly(page) {
   const searchRunsBefore = await page.evaluate(() => window.__daily.store().searchRuns || 0);
-  await page.click('#hubList li[data-id="search"]');
-  await page.waitForTimeout(1200);
+  await startEvent(page, "search", "search");
+  await page.waitForTimeout(700);
   await advanceAll(page);
   await page.waitForTimeout(300);
 
@@ -2261,21 +2487,8 @@ async function runSearchEarly(page) {
   }, null, { timeout: 5000 }).catch(() => fail("G02 选了「先喊她一声」，returnChoice 没记上"));
   // 一边读收尾一边把台词记下来：§4.3 的步数评价只在措辞里，得看真的说了。
   const earlyLines = [];
-  const et0 = Date.now();
-  while (Date.now() - et0 < 16000) {
-    const st = await page.evaluate(() => ({
-      hub: document.getElementById("hub").classList.contains("show"),
-      dlg: window.DAILY.dialogOpen(),
-      who: document.getElementById("who").textContent,
-      line: document.getElementById("line").textContent
-    }));
-    if (st.hub) break;
-    if (st.dlg) {
-      earlyLines.push(st.who + "：" + st.line);
-      await page.keyboard.press("KeyE");
-      await page.waitForTimeout(85);
-    } else await page.waitForTimeout(120);
-  }
+  const earlyOver = await drainToEnd(page, 20000, earlyLines);
+  if (!earlyOver) fail("G02 提前找到之后壳没有回到自由走动");
   if (!earlyLines.some((x) => x.indexOf("心里有谱") >= 0)) {
     fail(`G02 首通只走了 1 次换场，收尾没有少步数口径（实际：${earlyLines.join(" | ")}）`);
   }
@@ -2284,11 +2497,9 @@ async function runSearchEarly(page) {
   }
 
   const done = await page.evaluate(() => ({
-    hub: document.getElementById("hub").classList.contains("show"),
     saved: window.__daily.store().searchCompleted === true,
     clues: window.__daily.store().searchClues
   }));
-  if (!done.hub) fail("G02 提前找到之后没有回到目录");
   if (!done.saved) fail("G02 没有存下 searchCompleted");
   if (done.clues !== 0) fail(`G02 一条线索都没看，存档里却是 ${done.clues} 条`);
   return done;
@@ -2382,8 +2593,8 @@ async function runSearch(page) {
   if (!verdicts.mid.length) fail("G02 中等步数没有说话");
 
   // ================= 第二遍：游玩次 1 → 楼梯拐角台阶 =================
-  await page.click('#hubList li[data-id="search"]');
-  await page.waitForTimeout(1200);
+  await startEvent(page, "search", "search");
+  await page.waitForTimeout(700);
   await advanceAll(page);
   await page.waitForTimeout(300);
 
@@ -2791,34 +3002,19 @@ async function runSearch(page) {
   if (rc2 !== null && rc2 !== -1) fail(`G02 故意不选，returnChoice 却是 ${rc2}`);
   // 一边读收尾一边记台词：步数评价只在措辞里。
   const tailLines = [];
-  const tailT0 = Date.now();
-  while (Date.now() - tailT0 < 18000) {
-    const st = await page.evaluate(() => ({
-      hub: document.getElementById("hub").classList.contains("show"),
-      dlg: window.DAILY.dialogOpen(),
-      who: document.getElementById("who").textContent,
-      line: document.getElementById("line").textContent
-    }));
-    if (st.hub) break;
-    if (st.dlg) {
-      tailLines.push(st.who + "：" + st.line);
-      await page.keyboard.press("KeyE");
-      await page.waitForTimeout(85);
-    } else await page.waitForTimeout(120);
-  }
+  const tailOver = await drainToEnd(page, 20000, tailLines);
+  if (!tailOver) fail("G02 第二遍结束后壳没有回到自由走动");
   if (!tailLines.some((x) => x.indexOf("心里有谱") >= 0)) {
     fail(`G02 这一遍只走了 ${stepMark} 次换场，收尾应该是少步数口径（实际：${tailLines.join(" | ")}）`);
   }
 
   const done = await page.evaluate(() => ({
-    hub: document.getElementById("hub").classList.contains("show"),
     saved: window.__daily.store().searchCompleted === true,
     clues: window.__daily.store().searchClues,
     hints: window.__daily.store().searchHints,
     runs: window.__daily.store().searchRuns,
     routeSolved: window.__daily.store().searchRouteSolved
   }));
-  if (!done.hub) fail("G02 找完没有回到目录");
   if (!done.saved) fail("G02 找完没有存下 searchCompleted");
   if (done.clues !== clueN) {
     fail(`G02 存档里的线索数 ${done.clues} 和线索本 ${clueN} 不一致 ｜ 轨迹：${trace.join(" → ")}`);
@@ -2831,6 +3027,7 @@ async function runSearch(page) {
 
   // ================= 旧存档兼容：searchClues 等旧键读入不报错 =================
   // 单开一个浏览器上下文来装旧存档，不污染主页面已经跑出来的存档。
+  // 全通存档 + ?hub=1：壳不跳转，压整章结果卡；「回到目录」后才露出调试目录。
   const oldSave = {
     errandCompleted: true, soloJurieCompleted: true,
     searchCompleted: true, searchClues: 4, searchHints: 2, searchRouteSolved: false,
@@ -2845,26 +3042,41 @@ async function runSearch(page) {
   await p2.addInitScript((data) => {
     localStorage.setItem("our-story-act5-daily-v1", JSON.stringify(data));
   }, oldSave);
-  await p2.goto(PAGE, { waitUntil: "load", timeout: 60000 });
+  await p2.goto(PAGE_HUB, { waitUntil: "load", timeout: 60000 });
   await p2.waitForFunction(() => window.__daily && window.__daily.events, null, { timeout: 30000 });
   await p2.waitForTimeout(1200);
   const oldOk = await p2.evaluate(() => {
     const st = window.__daily.store();
     return {
-      hub: !document.getElementById("hub").hidden,
+      url: location.href,
+      card: !document.getElementById("card").hidden,
       clues: st.searchClues, hints: st.searchHints,
       runs: st.searchRuns, errandRuns: st.errandRuns, words: st.wordGameCorrect
     };
   });
-  if (!oldOk.hub) fail("G02 旧存档读入后目录没出来");
+  if (oldOk.url.indexOf("narrative") >= 0) fail("G02 旧存档 + ?hub=1 不该跳收尾");
+  if (!oldOk.card) fail("G02 旧存档读入后整章结果卡没出来");
   if (oldOk.clues !== 4 || oldOk.hints !== 2) fail("G02 旧存档的 searchClues / searchHints 没保留");
   if (oldOk.words !== 7) fail("G02 旧存档的 wordGameCorrect 没保留");
   if (oldOk.runs !== undefined || oldOk.errandRuns !== undefined) {
     fail("G02 旧存档没有新的游玩次计数，读进来应该是缺省（不写脏值）");
   }
-  // 旧存档下再进一次：游玩次从 0 起，首通参数不报错
-  await p2.click('#hubList li[data-id="search"]');
-  await p2.waitForTimeout(1400);
+  // 结果卡 → 回到目录 → 调试目录露出来，六个都是「可重访」
+  await p2.click("#cardBack");
+  await p2.waitForTimeout(400);
+  const oldHub = await p2.evaluate(() => ({
+    show: document.getElementById("hub").classList.contains("show"),
+    done: document.querySelectorAll("#hubList li.done").length
+  }));
+  if (!oldHub.show) fail("G02 旧存档：结果卡「回到目录」没把目录压出来");
+  if (oldHub.done !== 6) fail(`G02 旧存档：目录里「可重访」是 ${oldHub.done} 项，应该是 6`);
+  // 旧存档下再进一次：游玩次从 0 起，首通参数不报错（play 的 Promise 不能 return，会死锁）
+  await p2.evaluate(() => { window.__daily.play("search"); });
+  await p2.waitForFunction(() => {
+    const g = window.__daily.current;
+    return !!g && g.id === "search";
+  }, null, { timeout: 10000 }).catch(() => {});
+  await p2.waitForTimeout(900);
   const p2start = await p2.evaluate(() => {
     const x = window.__daily.current;
     return x ? { state: x.state, runs: x.runs, spot: x.round.spot.id } : null;
@@ -2886,7 +3098,7 @@ async function runBall(page) {
   // 一场球从开球到收尾。开局对白不是点完就有的：章节壳先淡出 220ms，
   // start 再淡入 420ms + 200ms。固定 sleep 会扑空，advanceAll 直接返回。
   const openMatch = async () => {
-    await page.click('#hubList li[data-id="ball"]');
+    await startEvent(page, "ball", "ball_match");
     await page.waitForFunction(() => {
       const g = window.__daily.current;
       return g && (g.state === "play" || window.DAILY.dialogOpen());
@@ -2933,6 +3145,7 @@ async function runBall(page) {
       actSize: act ? act.getBoundingClientRect().width : 0,
       board: board ? board.getAttribute("src") : "",
       hub: document.getElementById("hub").classList.contains("show"),
+      over: !window.__daily.current && !window.__daily.busy,
       obj: document.getElementById("objSub").textContent
     };
   });
@@ -3449,11 +3662,10 @@ async function runBall(page) {
   }
   await page.screenshot({ path: path.join(OUT, "b6-lose-rest.png") });
   await advanceAll(page);
-  await page.waitForFunction(() => document.getElementById("hub").classList.contains("show"),
-    null, { timeout: 15000 }).catch(() => { });
+  if (!(await waitEventOver(page, 20000))) fail("G04 站桩局结束后壳没有回到自由走动");
   s = await B();
-  if (!s.hub) fail("G04 站桩局结束后没有回到目录");
-  if (s.hud) fail("G04 站桩局退回目录后记分牌还挂着");
+  if (!s.over) fail("G04 站桩局结束后小游戏还没释放");
+  if (s.hud) fail("G04 站桩局散场后记分牌还挂着");
 
   const store1 = await page.evaluate(() => window.__daily.store());
   if (store1.ballGameCompleted !== true) fail("G04 站桩局后没写 ballGameCompleted");
@@ -3480,11 +3692,10 @@ async function runBall(page) {
     fail(`G04 第二场收尾记分牌不是 ${winEnd.scoreMe}:${winEnd.scoreThem}`);
   }
   await advanceAll(page);
-  await page.waitForFunction(() => document.getElementById("hub").classList.contains("show"),
-    null, { timeout: 15000 }).catch(() => { });
+  if (!(await waitEventOver(page, 20000))) fail("G04 第二场结束后壳没有回到自由走动");
   s = await B();
-  if (!s.hub) fail("G04 第二场结束后没有回到目录");
-  if (s.hud) fail("G04 第二场退回目录后记分牌还挂着");
+  if (!s.over) fail("G04 第二场结束后小游戏还没释放");
+  if (s.hud) fail("G04 第二场散场后记分牌还挂着");
   await page.waitForTimeout(380);
   await page.screenshot({ path: path.join(OUT, "b4-hub.png") });
 
@@ -3657,31 +3868,29 @@ async function runBrowser() {
     window.__reactLog = [];
     window.DAILY.on("react", (r) => window.__reactLog.push(r.who + "：" + r.text));
   });
-  await page.waitForTimeout(1600);
 
-  const hub = await page.evaluate(() => ({
-    items: document.querySelectorAll("#hubList li").length,
-    playable: document.querySelectorAll("#hubList li.playable").length,
-    locked: document.querySelectorAll("#hubList li.locked").length
-  }));
-  if (hub.items !== 6) fail(`目录 ${hub.items} 项，应该是 6 项`);
-  if (hub.playable !== 6) fail(`目录里可玩 ${hub.playable} 项，六个都该能点`);
-  if (hub.locked !== 0) fail(`目录里还锁着 ${hub.locked} 项`);
-  await page.screenshot({ path: path.join(OUT, "d0-hub.png") });
-
-  // 先走「一句话不问直接找到」，再走「看全了再找」——两种都要成立
-  const seEarly = await runSearchEarly(page);
-  const se = await runSearch(page);
+  // 默认进入 = 校园自由走动。runCampus 验完走动 / 换场景 / 贴近目标，结尾按 E 把 G01 开起来。
+  stage("校园自由走动");
+  await runCampus(page);
+  stage("G01 一起去办事（首通 + 重玩）");
   const er = await runErrand(page);
-  await runSolo(page, "jurie", { key: "soloJurieCompleted", reply: "soloJurieReply", value: "direct" });
-  await runSolo(page, "yuno", { key: "soloYunoCompleted", reply: "soloYunoReply", value: "secret" });
-  const wd = await runWord(page);
+  // G01 做完人还站在公告栏旁，按 E 直接进周二朱里；其余各场用调试口进。
+  stage("周二 朱里（单人）");
+  await runSolo(page, "jurie", { key: "soloJurieCompleted", reply: "soloJurieReply", value: "direct" }, true);
+  // 先走「一句话不问直接找到」，再走「看全了再找」——两种都要成立
+  stage("G02 校园寻物（提前找到）");
+  const seEarly = await runSearchEarly(page);
+  stage("G02 校园寻物（看全再找 + 旧存档）");
+  const se = await runSearch(page);
+  stage("周四 由乃（单人）");
+  await runSolo(page, "yuno", { key: "soloYunoCompleted", reply: "soloYunoReply", value: "secret" }, false);
+  // G04 不能压轴：它一完成，若日常全齐壳就直接跳收尾，第二场就开不了了。
+  stage("G04 体育活动（站桩输 + 重开赢 + 确定性自检）");
   const bl = await runBall(page);
+  stage("G04 散场残留检查");
 
-  await page.screenshot({ path: path.join(OUT, "d8-hub-done.png") });
-
-  // 四个游戏都退干净了：F 胶囊、短反应、两块插曲面板不许留在目录上；
-  // 而且这时候按 F 不该再触发任何一场的主动发起（onPoke 必须在 dispose 里清掉）。
+  // G04 散场后（不刷新页面）：各游戏的面板 / 胶囊不许留在自由走动画面上，
+  // 按 F 也不该再触发任何一场的主动发起（onPoke 必须在 dispose 里清掉）。
   const left = await page.evaluate(() => ({
     btn: document.getElementById("reactBtn").hidden,
     react: document.getElementById("react").hidden,
@@ -3690,20 +3899,111 @@ async function runBrowser() {
     solo: document.getElementById("soloChoice").hidden
   }));
   for (const k of Object.keys(left)) {
-    if (!left[k]) fail(`全部日常结束后，目录上还留着 ${k}`);
+    if (!left[k]) fail(`G04 散场后，自由走动画面上还留着 ${k}`);
   }
   const n0 = await page.evaluate(() => window.DAILY.reactStats().count);
   await page.keyboard.press("KeyF");
   await page.waitForTimeout(300);
   const n1 = await page.evaluate(() => window.DAILY.reactStats().count);
-  if (n1 !== n0) fail("回到目录后按 F 还能触发上一场的主动发起");
-  ok(`六个日常：G01 搭话 / 两段单人日常双轴走位 / G02 自言自语 / G03 抢答+换你出题 / G04 喊一声，目录无残留`);
+  if (n1 !== n0) fail("散场后按 F 还能触发上一场的主动发起");
+  ok("G04 散场后画面无残留，F 不再串场");
+
+  // G03 压轴：它是最后一个没做完的日常，做完壳直接跳 narrative 收尾。
+  stage("G03 课间猜人物（压轴，做完跳收尾）");
+  const wd = await runWord(page);
+
+  // ---- 全通之后：?hub=1 不跳转，压整章结果卡；「回到目录」露出调试目录 ----
+  stage("全通结果卡 / 目录 / 清存档");
+  await page.goto(PAGE_HUB, { waitUntil: "load", timeout: 60000 });
+  await page.waitForFunction(() => window.__daily && window.__daily.events, null, { timeout: 30000 });
+  await page.waitForTimeout(1200);
+  const card = await page.evaluate(() => ({
+    url: location.href,
+    shown: !document.getElementById("card").hidden &&
+      document.getElementById("card").classList.contains("show"),
+    title: document.getElementById("cardTitle").textContent,
+    back: !document.getElementById("cardBack").hidden,
+    after: !document.getElementById("afterStoryCard").hidden,
+    afterHref: document.getElementById("afterStoryCard").getAttribute("href")
+  }));
+  if (card.url.indexOf("narrative") >= 0) fail("全通存档 + ?hub=1 不该跳收尾（调试目录要留着）");
+  if (!card.shown) fail("全通存档 + ?hub=1 没有压出整章结果卡");
+  if (card.title.indexOf("那几个日常") < 0) fail(`结果卡标题是「${card.title}」`);
+  if (!card.back) fail("手动模式下结果卡没有「回到目录」");
+  if (!card.after || card.afterHref !== "narrative/index.html?phase=after") {
+    fail(`结果卡上的收尾入口不对（${card.afterHref}）`);
+  }
+  await page.screenshot({ path: path.join(OUT, "d8-chapter-card.png") });
+
+  await page.click("#cardBack");
+  await page.waitForTimeout(400);
+  let hub = await hubState(page);
+  if (!hub.hubShow) fail("结果卡「回到目录」没有把目录压出来");
+  if (hub.done !== 6 || hub.locked !== 0 || hub.playable !== 0) {
+    fail(`全通目录应该 6 完成 / 0 锁定 / 0 可玩，实际 ${hub.done}/${hub.locked}/${hub.playable}`);
+  }
+  if (!hub.afterStoryHub) fail("全通后目录上没有收尾入口");
+  await page.screenshot({ path: path.join(OUT, "d8-hub-done.png") });
+
+  // 清存档：回到 1 可玩 / 5 锁定，收尾入口收掉
+  await page.click("#hubReset");
+  await page.waitForTimeout(300);
+  hub = await hubState(page);
+  const keys = await page.evaluate(() => Object.keys(window.__daily.store()));
+  if (keys.length) fail("清存档后 store 里还有 " + keys.join(","));
+  if (hub.playable !== 1 || hub.locked !== 5 || hub.done !== 0) {
+    fail(`清存档后目录应该 1 可玩 / 5 锁定 / 0 完成，实际 ${hub.playable}/${hub.locked}/${hub.done}`);
+  }
+  if (hub.afterStoryHub) fail("清存档后收尾入口还挂着");
+  await page.screenshot({ path: path.join(OUT, "d9-hub-reset.png") });
+  ok("全通结果卡 → 回到目录（6 可重访）→ 清存档（1 可玩 / 5 锁定）都成立");
+
+  // ---- 自动时间线冒烟：?auto=1 自己从周一日期卡开始推进 ----
+  // browser.newPage 是新 context，localStorage 干净，正好是全新进度。
+  stage("?auto=1 自动时间线冒烟");
+  const auto = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  const autoErrors = [];
+  auto.on("pageerror", (e) => autoErrors.push("pageerror: " + e.message));
+  auto.on("console", (m) => { if (m.type() === "error") autoErrors.push("console: " + m.text()); });
+  await auto.goto(PAGE_AUTO, { waitUntil: "load", timeout: 60000 });
+  await auto.waitForFunction(() => window.__daily && window.__daily.events, null, { timeout: 30000 });
+  await auto.waitForFunction(() => !document.getElementById("dayCard").hidden,
+    null, { timeout: 10000 }).catch(() => { });
+  const day0 = await auto.evaluate(() => ({
+    day: document.getElementById("dayCard").hidden
+      ? null : document.getElementById("dayName").textContent,
+    busy: window.__daily.busy,
+    hub: document.getElementById("hub").classList.contains("show")
+  }));
+  if (day0.day !== "周一") fail(`?auto=1 开场日期卡是「${day0.day}」，应该是周一`);
+  if (!day0.busy) fail("?auto=1 没有自己开始推进时间线");
+  if (day0.hub) fail("?auto=1 不该压出单场目录");
+  await auto.waitForTimeout(340);
+  await auto.screenshot({ path: path.join(OUT, "p0-auto-mon.png") });
+  // 读完周一旁白 → G01 自己开起来
+  const autoT0 = Date.now();
+  let autoGame = null;
+  while (Date.now() - autoT0 < 15000) {
+    const st = await auto.evaluate(() => ({
+      dlg: window.DAILY.dialogOpen(),
+      id: window.__daily.current && window.__daily.current.id
+    }));
+    if (st.id) { autoGame = st.id; break; }
+    if (st.dlg) await auto.keyboard.press("KeyE");
+    await auto.waitForTimeout(100);
+  }
+  if (autoGame !== "errand") fail(`?auto=1 开场进的是 ${autoGame}，应该是 errand`);
+  const autoDays = await auto.evaluate(() => window.__daily.daysShown);
+  if (autoDays[0] !== "周一") fail("?auto=1 的 daysShown 第一项不是周一");
+  if (autoErrors.length) fails.push(...autoErrors.slice(0, 3));
+  else ok("?auto=1 自动时间线：周一日期卡 → 旁白 → G01 自己开场");
+  await auto.close();
 
   if (errors.length) fails.push(...errors.slice(0, 6));
   else ok("浏览器无报错");
 
   await browser.close();
-  return { hub, seEarly, se, er, wd, bl };
+  return { seEarly, se, er, wd, bl };
 }
 
 // ---------------------------------------------------------------- 跑

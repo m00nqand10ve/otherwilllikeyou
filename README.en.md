@@ -12,7 +12,8 @@ A non-commercial, fan-made pixel romance story. Act 1 is a phone shooter played 
 hallway and a bedroom; the screen then hands over to the school arc: the corridor, the
 blackboard, the broadcast room, the evening broadcast, the CG by the white railing after
 school, and then Act 3 — the third-act story layer and six ordinary school days — stopping
-at the moment Yuno hands over the notebook in the corridor.
+at the moment Yuno hands over the notebook in the corridor, and then Act 4, *The Things I
+Don't Know*, which begins the next morning when he returns it.
 
 The whole game is static pages: **no build step, no server**. Double-click `index.html`
 in Chrome to play from the start screen through to the latest ending.
@@ -46,18 +47,18 @@ prompts appear on screen. Inside a minigame `Space` is usually a hold/timing act
 
 | Path | Contents |
 | --- | --- |
-| `index.html` | Full-story start screen: start fresh (clears local progress) / continue, with the five-part route |
+| `index.html` | Full-story start screen: start fresh (clears local progress) / continue, with the chapter-by-chapter route |
 | `prototype.html` | Act 1: hallway, bedroom, the phone shooter, closing diary; hosts the school arc in `#storyframe` |
 | `school-preview.html` | School arc opening and corridor; entered after Act 1's diary |
 | `act2/` | Blackboard and the transition to the broadcast room |
 | `act3/` | Evening broadcast rhythm minigame |
 | `act4/after-broadcast/` | The corridor after the broadcast; railing CG ending, then the Act 3 story layer |
-| `act5/narrative/` | Act 3 story layer: the opening and the final corridor scene, ending back at the start screen |
+| `act5/narrative/` | Act 3 story layer: the opening and the final corridor scene, handing over to Act 4 |
 | `act5/` | Daily school chapters (separate entry: `daily.html`), six days and the chapter card |
+| `act6/` | Act 4, *The Things I Don't Know*: ten story events and eight daily minigames; `?daily=1` opens the daily hub |
 | `assets/` | Pixel characters, scenes, CGs, tiles and Aseprite sources |
 | `tools/` | Asset generation; `full-story-check.cjs` checks the start screen and chapter seams |
 | `game/dust-corridor/` | The phone shooter inside Act 1 (built on claude-of-duty, MIT) |
-| `*.md` | Design, handover and asset notes |
 
 ## Tests
 
@@ -75,14 +76,15 @@ node tools/act2-ui-check.mjs         # shared E / Esc / R across both acts
 node tools/ui-parity-probe.mjs       # side-by-side UI screenshots
 ```
 
-The blackboard, broadcast, Act 3 story and daily chapters have their own checks (from the
-repository root):
+The blackboard, broadcast, Act 3 story, daily chapters and Act 4 have their own checks (from
+the repository root):
 
 ```bash
 node act2/tools/check.cjs
 node act3/tools/check.cjs
 node act5/narrative/tools/check.cjs    # Act 3 opening + final corridor + back to the start
 node act5/tools/check.cjs
+node act6/tools/check.cjs              # Act 4: eight daily minigames and the return to the story
 node tools/full-story-check.cjs        # start screen, continue, chapter seams
 ```
 

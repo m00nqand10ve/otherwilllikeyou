@@ -1,0 +1,41 @@
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#211d28;color:#fff4e8;font-family:"Microsoft YaHei",system-ui,sans-serif}button{font:inherit;cursor:pointer;color:#fff1e5;background:#725052;border:1px solid #e0b49b;padding:9px 15px;border-radius:3px}button:hover,button:focus-visible{background:#9c6863;outline:1px solid #fff4da}button:disabled{opacity:.4;cursor:default}[hidden]{display:none!important}#stage{position:fixed;inset:0;overflow:hidden}#art{position:absolute;left:50%;top:50%;width:max(100vw,177.778dvh);height:max(100dvh,56.25vw);transform:translate(-50%,-50%);overflow:hidden}#background{width:100%;height:100%;image-rendering:pixelated;object-fit:fill}#actors,#props{position:absolute;inset:0}.actor{position:absolute;width:13.125%;height:35%;object-fit:fill;image-rendering:pixelated;transform:translate(-50%,-100%);transition:left .75s linear,top .75s linear}.actor.small{width:7.875%;height:21%;opacity:.8}.actor.flip{transform:translate(-50%,-100%) scaleX(-1)}.prop{position:absolute;image-rendering:pixelated;max-width:5%}#veil{position:absolute;inset:0;background:#1b1924;opacity:0;pointer-events:none;transition:opacity .35s}header{position:absolute;left:4%;top:4%;display:grid;gap:2px;text-shadow:0 2px 5px #000b}header span{font-size:13px;letter-spacing:.25em;color:#f4cda8}header strong{font-size:clamp(17px,1.8vw,28px);font-weight:400}header small{font-size:14px}#dialog{position:absolute;left:5%;right:5%;bottom:5%;min-height:17%;background:#1b1723eb;border:1px solid #d9b595a8;padding:14px 23px;cursor:pointer;box-shadow:0 12px 32px #0008}#dialog b{font-size:clamp(17px,1.5vw,25px);font-weight:400;color:#ffcfaa}#dialog p{margin:7px 0 1px;font-size:clamp(21px,2.1vw,36px);line-height:1.55}#dialog small{display:block;text-align:right;color:#d8c8bd}#interaction,#ending{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(780px,92vw);max-height:78dvh;overflow:auto;background:#211b29f2;border:1px solid #d9b595;padding:25px;box-shadow:0 16px 45px #000a}#interaction h2,#ending h1{font-weight:400;margin:0 0 14px;font-size:clamp(22px,2.4vw,36px)}#interaction p,#ending p{font-size:clamp(17px,1.5vw,24px);line-height:1.65}.options{display:flex;flex-wrap:wrap;gap:10px}.option{min-width:130px}.cards{display:grid;gap:10px}.card{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;border:1px solid #a78a80;padding:10px;background:#382d37}.card select{font:inherit;color:#fff;background:#57404b;padding:6px}.board{position:relative;width:min(100%,640px);height:230px;margin:12px auto;background:#a98060;border:10px solid #614339;box-shadow:inset 0 0 0 3px #d4a980}.board-slot{position:absolute;border:2px dashed #e3c49f;padding:12px;min-width:26%;text-align:center;background:#e5d4ad33}.board-slot[data-kind=title]{top:14px;left:22%;width:55%}.board-slot[data-kind=photo]{top:80px;left:12%}.board-slot[data-kind=note]{top:80px;right:12%}.board-slot.done{border-style:solid;background:#f6e7c9;color:#332b35}.tokens{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}.tokens button.selected{background:#bb8068}.flight{position:relative;height:180px;border:1px solid #e0b49b;background:linear-gradient(#9bc3de,#f1c7a8);overflow:hidden}.flight img{position:absolute;width:32px;image-rendering:pixelated;left:12%;top:58%;transition:left 1s ease-out,top 1s ease-out}.flight img.fly{left:80%;top:20%}.memory{width:100%;aspect-ratio:16/9;object-fit:cover;image-rendering:pixelated}.hint{color:#f5caa5}nav{position:absolute;right:3%;top:4%;display:flex;gap:8px}#sound{padding:5px 9px;background:#211b29ad}#resume{padding:5px 9px}#ending{text-align:center}#ending p{line-height:2}#ending button{margin-top:18px}@media(max-width:650px){#dialog{left:3%;right:3%;bottom:3%;padding:10px 13px}#interaction{padding:15px;max-height:83dvh}.card{grid-template-columns:1fr}.board{height:180px}}
+/* 探索时将地点菜单收在画面一侧，让场景和行人保持可见。 */
+#interaction.campus{left:auto;right:2%;top:50%;transform:translateY(-50%);width:min(310px,32vw);max-height:82dvh;padding:14px;background:#211b29dc}
+#interaction.campus h2{font-size:20px;margin-bottom:4px}
+#interaction.campus p{font-size:13px;margin:0 0 9px}
+#interaction.campus .options{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+#interaction.campus .option,#interaction.campus button{min-width:0;padding:6px 7px;font-size:13px}
+#interaction.campus .options button:first-child{grid-column:1/-1}
+.actor.small{width:11.25%;height:30%;opacity:.8}
+.passerby{pointer-events:none}
+.passerby.right{animation:passRight 22s linear infinite}
+.passerby.left{animation:passLeft 22s linear infinite}
+@keyframes passRight{from{margin-left:-30%;opacity:.8}to{margin-left:95%;opacity:.8}}
+@keyframes passLeft{from{margin-left:35%;opacity:.8}to{margin-left:-90%;opacity:.8}}
+@media(max-width:650px){#interaction.campus{width:min(260px,48vw);right:1%;max-height:75dvh}#interaction.campus .options{grid-template-columns:1fr}}
+.actor.exploring{transition:none}
+#campusHint{position:absolute;left:4%;bottom:5%;z-index:4;padding:8px 13px;background:#211b29ba;border:1px solid #e0b49b88;color:#fff1df;font-size:clamp(14px,1.25vw,20px);pointer-events:none}
+#campusHint[hidden]{display:none}
+#campusNarration{position:absolute;left:4%;bottom:13%;z-index:4;max-width:69%;padding:9px 15px;background:#211b29d5;border-left:3px solid #ffd497;color:#fff1e3;font-size:clamp(17px,1.7vw,28px);line-height:1.5;pointer-events:none}
+#campusNarration[hidden]{display:none}
+/* 触屏探索：屏幕方向键（按住走、松手停）和只在事件点出现的互动按钮。 */
+#campusPad{position:absolute;left:3%;bottom:24%;z-index:5;display:grid;grid-template-columns:repeat(3,46px);grid-template-rows:repeat(2,46px);gap:5px;touch-action:none;user-select:none}
+#campusPad[hidden]{display:none}
+#campusPad button{width:46px;height:46px;padding:0;font-size:19px;line-height:1;background:#211b29cc;border:1px solid #e0b49b99;color:#fff1e5;touch-action:none}
+#campusPad button.on{background:#9c6863e6;border-color:#ffd497}
+#campusPad button[data-dir=up]{grid-area:1/2}
+#campusPad button[data-dir=left]{grid-area:2/1}
+#campusPad button[data-dir=down]{grid-area:2/2}
+#campusPad button[data-dir=right]{grid-area:2/3}
+#campusInteract{position:absolute;right:3%;bottom:24%;z-index:5;max-width:62%;padding:11px 16px;font-size:clamp(15px,1.3vw,19px);background:#725052e6;border:1px solid #ffd497;border-radius:4px;box-shadow:0 6px 18px #0008}
+#campusInteract[hidden]{display:none}
+#campusInteract:active{background:#9c6863}
+/* 事件中途失败：重试这一段 / 回到校园 */
+#eventFailure{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);z-index:6;width:min(520px,90vw);padding:20px 22px;background:#211b29f7;border:1px solid #d9b595;box-shadow:0 16px 45px #000a;text-align:center}
+#eventFailure h2{font-weight:400;margin:0 0 8px;font-size:clamp(19px,1.9vw,24px);color:#ffd9ae}
+#eventFailure p{margin:0 0 14px;font-size:15px;line-height:1.6;color:#d8c8bd}
+#eventFailure .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+#eventFailure button{padding:8px 14px}
+/* 选项的 1/2/3 数字编号，和数字键对应 */
+.option-no{display:inline-block;min-width:1.6em;margin-right:8px;padding:0 4px;font-style:normal;font-size:.8em;text-align:center;color:#ffd497;border:1px solid #d9b59566;border-radius:2px}
+@media(max-width:650px){#campusPad{left:2%;bottom:26%;grid-template-columns:repeat(3,42px);grid-template-rows:repeat(2,42px)}#campusPad button{width:42px;height:42px}#campusInteract{right:2%;bottom:26%;padding:9px 12px}}

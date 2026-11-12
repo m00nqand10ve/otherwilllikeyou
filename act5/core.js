@@ -19,6 +19,10 @@
   D.on = function (k, fn) { (bus[k] || (bus[k] = [])).push(fn); };
   D.emit = function (k, payload) { (bus[k] || []).forEach((fn) => fn(payload)); };
 
+  // 对白开始压一点场景曲，说完再还回来；短反应不经过这里，所以不压。
+  D.on("dialog:start", function () { if (window.BGM) BGM.duck(0.55, 400); });
+  D.on("dialog:end", function () { if (window.BGM) BGM.unduck(700); });
+
   // ---------------------------------------------------------------- 存档
   // 只存「做过什么」，不存「她有多喜欢你」——设计稿第 12.4 节。
   const KEY = "our-story-act5-daily-v1";
@@ -251,12 +255,16 @@
   /** 单次按下（不是按住）。回调拿到原始 key。 */
   D.onPress = function (fn) { pressHandlers.push(fn); };
 
-  // Tab 也要拦：线索本用它开关，不拦的话焦点会跑走，接着按空格就在点按钮了。
-  const BLOCK = [" ", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Tab"];
+  // Tab 只在需要它的章节里拦：第三幕 G01 用它换人、G02 用它开关线索本，
+  // 不拦的话焦点会跑走，接着按空格就在点按钮了。第四幕要能用 Tab 走到选项和按钮，
+  // 由 act6/minigames.js 启动时把 D.tabCapture 关掉。
+  D.tabCapture = true;
+  const BLOCK = [" ", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
 
   window.addEventListener("keydown", function (e) {
     if (typing()) return;            // 猜词输入框里打汉字时不许人物乱走
     if (BLOCK.indexOf(e.key) >= 0) e.preventDefault();
+    else if (e.key === "Tab" && D.tabCapture) e.preventDefault();
     D.keys[e.key.toLowerCase()] = true;
     if (e.repeat) return;
     for (const fn of pressHandlers) fn(e.key, e);

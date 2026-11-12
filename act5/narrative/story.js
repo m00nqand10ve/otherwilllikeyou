@@ -25,6 +25,9 @@
   const actors = { boy: null, girl: null, friend: null };
   const KEY = "our-story-act5-narrative-v1";
   const DAILY_KEY = "our-story-act5-daily-v1";
+  const PHASE_AFTER = new URLSearchParams(location.search).get("phase") === "after";
+
+  function baseTrack() { return PHASE_AFTER ? "dusk" : "afternoon"; }
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch { saved = {}; }
   let scene = "loading", background = "classroom", now = 0, last = 0;
@@ -64,6 +67,7 @@
     const item = lines[lineIndex];
     if (!item) {
       dialog.hidden = true;
+      if (window.BGM) BGM.unduck(700);
       const done = lineDone; lineDone = null;
       if (done) done();
       return;
@@ -80,6 +84,7 @@
     }, 27);
   }
   function say(items) {
+    if (window.BGM) BGM.duck(0.55, 400);
     return new Promise((resolve) => {
       lines = items; lineIndex = 0; lineDone = resolve;
       dialog.hidden = false; showLine();
@@ -115,8 +120,18 @@
     scene = kind === "quiet" ? "quiet" : "emotion";
     emotionTitle.textContent = title;
     emotionLine.textContent = description;
+    // 心绪互动是短促的主观段：encounter / familiar 用 tense，
+    // 本子那一段是「知道了一件事」，不升紧张度，只把音乐压下去。
+    if (window.BGM) {
+      if (kind === "quiet") BGM.duck(0.35, 600);
+      else BGM.play("tense", { fade: 0.8 });
+    }
     await emotion.start(kind);
     persist(kind === "quiet" ? { disclosureRegulated: true } : { firstRegulated: true });
+    if (window.BGM) {
+      if (kind === "quiet") BGM.unduck(900);
+      else BGM.play(baseTrack(), { fade: 1.2 });
+    }
   }
   function finish(title, body, href, label, options) {
     scene = "end";
@@ -215,9 +230,7 @@
       ["和臣·心声", "本子比看上去沉一点。那一页的名字，我到底该不该去看。"]
     ]);
     await arrival;
-    // 这里就是目前最新的剧情。回开始页，让整条流程有一个真正的出口；
-    // 「重看这一段」仍然留在旁边。
-    finish("本子还没还", "由乃只让我去问二班那个人，没说是替谁问。本子在我手里，明天要还给她；那一页的名字，我还没翻。", "../../index.html", "回到开头", { top: true });
+    finish("本子还没还", "由乃只让我去问二班那个人，没说是替谁问。本子在我手里，明天要还给她；那一页的名字，我还没翻。", "../../act6/index.html", "第二天 · 去还本子", { top: true });
   }
 
   function drawActor(person) {
@@ -269,7 +282,10 @@
   dialog.addEventListener("click", advance);
   document.getElementById("replay").addEventListener("click", () => { location.href = location.pathname + location.search; });
   Promise.all(Object.entries(ASSET).map(async ([key, src]) => { im[key] = await load(src); }))
-    .then(() => { const after = new URLSearchParams(location.search).get("phase") === "after"; return after ? afterDaily() : intro(); })
+    .then(() => {
+      if (window.BGM) BGM.play(baseTrack(), { fade: 1.6 });
+      return PHASE_AFTER ? afterDaily() : intro();
+    })
     .catch((error) => { finish("场景未能打开", String(error), "../daily.html", "返回校园日常"); });
   requestAnimationFrame(frame);
   window.__narrative = {

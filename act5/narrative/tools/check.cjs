@@ -146,9 +146,9 @@ const fs = require("node:fs");
         target: link.getAttribute("target")
       };
     });
-    if (endCard.text !== "回到开头") throw new Error("收尾最后没有回到开头的入口");
-    if (!endCard.href || !endCard.href.endsWith("index.html")) throw new Error("收尾没有回到根目录开始页：" + endCard.href);
-    if (endCard.target !== "_top") throw new Error("收尾的回到开头没有跳出 storyframe");
+    if (endCard.text !== "第二天 · 去还本子") throw new Error("收尾最后没有接到第四幕的入口");
+    if (!endCard.href || !endCard.href.endsWith("act6/index.html")) throw new Error("收尾没有接到第四幕：" + endCard.href);
+    if (endCard.target !== "_top") throw new Error("收尾的第四幕入口没有跳出 storyframe");
     await shot("05-end.png");
 
     const act4 = path.join(__dirname, "..", "..", "..", "act4", "after-broadcast", "index.html");

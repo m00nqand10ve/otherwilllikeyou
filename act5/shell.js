@@ -13,8 +13,9 @@
     corridor: "../assets/scenes/school_corridor_door_pixel.png",
     stair: "../act4/after-broadcast/assets/stairwell.png",
     railing: "../assets/scenes/school_corridor_railing_pixel.png",
+    board: "../assets/scenes/school_corridor_board_lowered_512.png",
     ballSheet: "../assets/minigame/ball_sheet.png",
-    dayField: "../assets/minigame/cutscene_next_monday_field.png",
+    dayField: "../assets/scenes/school_exterior_pixel.png",
     g01Handoff: "../assets/cg/act5/story_g01_handoff_512.png",
     g03Bench: "../assets/cg/act5/story_g03_bench_512.png",
     g04Exit: "../assets/cg/act5/story_g04_exit_512.png",
@@ -47,6 +48,16 @@
     { id: "ball", day: "下周一", name: "体育活动", playable: true, key: "ballGameCompleted" }
   ];
 
+  // 每个日期的基础曲：早上到校、放学后、午休/课间。球类活动在玩法开始时
+  // 单独换成 ball，散场再回 dusk。
+  function cueFor(id) {
+    if (!window.BGM) return;
+    const track = id === "errand" ? "morning"
+      : id === "jurie" ? "dusk"
+        : "afternoon";
+    BGM.play(track, { fade: 1.4 });
+  }
+
   // 自动时间线的跨日卡。周一 / 周五 / 下周一复用 assets/cg/act5 里的过门 CG；
   // 周三没有对应 CG，先拿走廊图压暗占位。
   // 日期和时间由卡面负责；各游戏自己的日期开场只出现一次，外层不再重述。
@@ -78,7 +89,39 @@
   ];
 
   // 默认进来就按时间线走；?hub=1 才显示单场目录（调试 / 清存档）。
-  const MANUAL_HUB = new URLSearchParams(location.search).get("hub") === "1";
+  const MANUAL_HUB = new URLSearchParams(location.search).get("auto") !== "1";
+  const DEBUG_HUB = new URLSearchParams(location.search).get("hub") === "1";
+  const campusAreas=[
+    {name:'四班门口',image:'corridor'},
+    {name:'公告栏',image:'board'},
+    {name:'楼梯口',image:'stair'},
+    {name:'走廊护栏',image:'railing'},
+    {name:'楼前空地',image:'dayField'}
+  ];
+  // 接上一段三班门口的站位；进入日常后和臣仍在走廊里。
+  const campusRoute=new CampusRoute(campusAreas,0,68);
+  let campusY=246;
+  let campusFacing='down', campusWalkUntil=0;
+  const eventArea={errand:1,jurie:1,search:0,yuno:2,word:3,ball:4};
+  const campusTargets={errand:55,jurie:55,search:55,yuno:55,word:55,ball:55};
+  const campusCast={
+    errand:[['girl',330],['friend',402]],
+    jurie:[['girl',350]],
+    search:[['girl',335],['friend',405]],
+    yuno:[['friend',355]],
+    word:[['girl',340],['friend',405]],
+    ball:[['girl',340],['friend',405]]
+  };
+  const campusNarration={
+    errand:'第一节下课。朱里和由乃在公告栏前等着，似乎有东西要一起搬。',
+    jurie:'放学后的走廊安静了些。朱里还留在公告栏旁。',
+    search:'朱里的校园卡不见了。先回四班门口听听她上午去过哪里。',
+    yuno:'午休的楼梯口有风。由乃带着两瓶水，像是在等人。',
+    word:'又一个课间。她们在护栏边说笑，走近就能听清。',
+    ball:'周一放学前，楼前空地传来球声。她们已经到了。'
+  };
+  const campusNarrationEl=document.getElementById('campusNarration');
+  function nearCampusTarget(ev){return !!ev && eventArea[ev.id]===campusRoute.area && Math.abs(campusRoute.x-campusTargets[ev.id])<=18 && campusY>=214;}
 
 
   const GAME = {
@@ -148,10 +191,15 @@
 
   function renderHub() {
     hubList.innerHTML = "";
-    EVENTS.forEach(function (ev) {
+    const nextEvent = EVENTS[nextUnfinishedIndex()];
+    const startButton = document.getElementById("hubStart");
+    startButton.textContent = nextEvent ? '到' + campusAreas[eventArea[nextEvent.id]].name + '按 E' : '日常已完成';
+    startButton.disabled = !nearCampusTarget(nextEvent);
+    EVENTS.forEach(function (ev, index) {
       const done = ev.key && D.store[ev.key];
+      const available = index <= nextUnfinishedIndex();
       const li = document.createElement("li");
-      li.className = ev.playable ? (done ? "done" : "playable") : "locked";
+      li.className = !available ? "locked" : done ? "done" : "playable";
       li.dataset.id = ev.id;
 
       const day = document.createElement("span");
@@ -160,16 +208,14 @@
 
       const name = document.createElement("span");
       name.className = "name";
-      name.textContent = ev.name;
+      name.textContent = ev.name + ' · ' + campusAreas[eventArea[ev.id]].name;
 
       const tag = document.createElement("span");
       tag.className = "tag";
-      tag.textContent = done ? "已完成" : ev.playable ? "可玩" : ev.tag;
+      tag.textContent = done ? "可重访" : available ? "前往" : "以后再去";
 
       li.append(day, name, tag);
-      if (ev.playable && !busy) {
-        li.addEventListener("click", function () { playEvent(ev.id); });
-      }
+      // 事件由场景内走到对应区域后触发，列表只显示地点和进度。
       hubList.appendChild(li);
     });
     document.getElementById("afterStoryHub").hidden = !hasFinishedDailyEvents();
@@ -177,14 +223,23 @@
 
   function showHub() {
     renderHub();
-    hubEl.hidden = false;
-    requestAnimationFrame(function () { hubEl.classList.add("show"); });
-    chapterEl.textContent = "校园日常";
+    if (DEBUG_HUB) {
+      hubEl.hidden = false;
+      requestAnimationFrame(function () { hubEl.classList.add("show"); });
+    } else {
+      hubEl.hidden = true;
+      hubEl.classList.remove("show");
+    }
+    const next = EVENTS[nextUnfinishedIndex()];
+    chapterEl.textContent = next ? '校园日常 / '+next.day+' · '+campusAreas[campusRoute.area].name : '校园日常';
+    campusNarrationEl.textContent=next?campusNarration[next.id]:'';
+    campusNarrationEl.hidden=!next;
   }
 
   function hideHub() {
     hubEl.classList.remove("show");
     hubEl.hidden = true;
+    campusNarrationEl.hidden = true;
   }
 
   function showCard(title, body, again) {
@@ -210,14 +265,25 @@
 
   async function playEvent(id) {
     if (busy || !GAME[id]) return;
+    const before = nextUnfinishedIndex();
     busy = true;
     hideHub();
     cardEl.hidden = true;
 
     await D.fadeTo(1, 220);
+    cueFor(id);
+    if (id === "ball" && window.BGM) BGM.play("ball", { fade: 0.8 });
     await runGame(GAME[id]());
     current = null;
+    if (id === "ball" && window.BGM) BGM.play("dusk", { fade: 1.4 });
     await D.fadeTo(1, 200);
+    const after = nextUnfinishedIndex();
+    if (after >= EVENTS.length) {
+      D.persist({ chapterDailyDone: true });
+      location.href = 'narrative/index.html?phase=after';
+      return;
+    }
+    if (after > before && after < EVENTS.length) await timeSkip(after);
     await D.fadeTo(0, 240);
 
     busy = false;
@@ -244,6 +310,7 @@
   /** 黑场里压一张日期卡，再回到画面上说一句短旁白。 */
   async function timeSkip(i) {
     const day = DAYS[i];
+    if (EVENTS[i]) cueFor(EVENTS[i].id);
     daysShown.push(day.day);
     dayBg.src = day.bg;
     dayIcon.src = day.icon;
@@ -295,11 +362,15 @@
       if (D.store[EVENTS[i].key]) continue;
       await D.fadeTo(1, 220);
       await timeSkip(i);
+      if (EVENTS[i].id === "ball" && window.BGM) BGM.play("ball", { fade: 0.8 });
       await runGame(GAME[EVENTS[i].id]());
       current = null;
       // G03 收尾已经说了上课铃；这里补一声，再做周末跳切。
       if (EVENTS[i].id === "word") D.audio.bell();
-      if (EVENTS[i].id === "ball") ballPlayed = true;
+      if (EVENTS[i].id === "ball") {
+        ballPlayed = true;
+        if (window.BGM) BGM.play("dusk", { fade: 1.4 });
+      }
     }
 
     // 比分 HUD 已经随 dispose 收掉。散场先看一张收东西的过门 CG，再出结果卡。
@@ -326,16 +397,70 @@
   // ---------------------------------------------------------------- 循环
 
   function drawIdle() {
-    if (D.img.corridor) ctx.drawImage(D.img.corridor, 0, 0, W, H);
+    const next = nextUnfinishedIndex();
+    const backdrop = D.img[campusRoute.areas[campusRoute.area].image];
+    if (backdrop) ctx.drawImage(backdrop, 0, 0, W, H);
     else { ctx.fillStyle = "#241f28"; ctx.fillRect(0, 0, W, H); }
-    ctx.fillStyle = "rgba(24,18,26,.55)";
-    ctx.fillRect(0, 0, W, H);
+    // 目录背后仍然有学生经过，学校不会因主角停下而静止。
+    const walk = D.img.npcBoyRight, other = D.img.npcGirlLeft;
+    const seconds = performance.now() / 1000;
+    const stride = Math.floor(seconds * 4) % 4;
+    if (walk) ctx.drawImage(walk, stride * 48, 0, 48, 72, Math.floor((seconds * 25) % 610) - 55, 161, 58, 86);
+    if (other) ctx.drawImage(other, stride * 48, 0, 48, 72, 555 - Math.floor((seconds * 22 + 175) % 610), 168, 55, 82);
+    const waiting=EVENTS[next];
+    if(waiting && eventArea[waiting.id]===campusRoute.area){
+      for(const [who,x] of campusCast[waiting.id]||[]){
+        const sprite=D.img[who];
+        if(sprite)ctx.drawImage(sprite,0,0,48,72,x-34,145,68,102);
+      }
+    }
+    if (D.img.boy && MANUAL_HUB) {
+      const idle={down:0,left:2,right:3,up:4};
+      const walking={down:5,left:9,right:13,up:17};
+      const moving=performance.now()<campusWalkUntil;
+      const spriteFrame=moving ? walking[campusFacing]+Math.floor(performance.now()/105)%4 : idle[campusFacing];
+      ctx.drawImage(D.img.boy, spriteFrame*48, 0, 48, 72, Math.round(campusRoute.x/100*W - 34), campusY-102, 68, 102);
+      ctx.fillStyle = '#fff0d7'; ctx.font = '12px sans-serif';
+      const here=campusRoute.areas[campusRoute.area].name;
+      ctx.fillText(here+' · WASD 四向走动，左右边缘换场景', 12, 275);
+      if(nearCampusTarget(waiting))ctx.fillText('E · '+waiting.name, 232, 126);
+    }
+    // 探索画面直接显示原背景；只有调试目录开启时才压暗。
+    if (DEBUG_HUB && !hubEl.hidden) {
+      ctx.fillStyle = "rgba(24,18,26,.22)";
+      ctx.fillRect(0, 0, W, H);
+    }
   }
 
   function frame(ts) {
     if (!last) last = ts;
     const dt = Math.min(0.05, (ts - last) / 1000);
     last = ts;
+
+    if (MANUAL_HUB && !current && !busy && !D.dialogOpen()) {
+      const keys=D.keys;
+      let dx=0,dy=0;
+      if(keys.a||keys.arrowleft)dx--;
+      if(keys.d||keys.arrowright)dx++;
+      if(keys.w||keys.arrowup)dy--;
+      if(keys.s||keys.arrowdown)dy++;
+      if(dx||dy){
+        const unit=dx&&dy?Math.SQRT1_2:1;
+        if(dx){
+          const next=EVENTS[nextUnfinishedIndex()];
+          const proposed=campusRoute.x+dx*dt*29*unit;
+          const castHere=next && eventArea[next.id]===campusRoute.area ? campusCast[next.id]||[] : [];
+          const blocked=campusY>220 && castHere.some(([,px]) => {
+            const target=px/W*100;
+            return Math.abs(proposed-target)<9 && Math.abs(proposed-target)<Math.abs(campusRoute.x-target);
+          });
+          if(!blocked){const step=campusRoute.move(dx,dt*29*unit);if(step.changed)showHub();}
+        }
+        campusY=Math.max(198,Math.min(258,campusY+dy*dt*105*unit));
+        campusFacing=dy?(dy<0?'up':'down'):(dx<0?'left':'right');
+        campusWalkUntil=ts+75;
+      }
+    }
 
     if (current && current.update) current.update(dt);
     ctx.clearRect(0, 0, W, H);
@@ -350,6 +475,14 @@
   D.onPress(function (key) {
     D.audio.unlock();
     if (D.dialogOpen()) { D.advance(); return; }
+    if (MANUAL_HUB && !current && !busy) {
+      if (["a","A","ArrowLeft","d","D","ArrowRight","w","W","ArrowUp","s","S","ArrowDown"].includes(key)) return;
+      if (["e","E","Enter"].includes(key)) {
+        const next = nextUnfinishedIndex();
+        if (next < EVENTS.length && nearCampusTarget(EVENTS[next])) playEvent(EVENTS[next].id);
+        return;
+      }
+    }
     // F 是四个小游戏共用的「主动发起」。收在章节壳里统一路由，
     // 各游戏只要在 start() 里 D.onPoke(handler) 就能接住，不用各自改 press()。
     if (key.toLowerCase() === "f") { D.poke(); return; }
@@ -364,7 +497,11 @@
   D.on("dialog:start", function () { if (current && current.setFrozen) current.setFrozen(true); });
   D.on("dialog:end", function () { if (current && current.setFrozen) current.setFrozen(false); });
 
-  document.getElementById("hubStart").onclick = function () { playAll(0); };
+  document.getElementById("hubStart").onclick = function () {
+    const next = nextUnfinishedIndex();
+    if (next < EVENTS.length && nearCampusTarget(EVENTS[next])) playEvent(EVENTS[next].id);
+    else showChapterCard();
+  };
   document.getElementById("hubReset").onclick = function () {
     D.wipe();
     renderHub();
@@ -404,18 +541,18 @@
     renderHub();
     raf = requestAnimationFrame(frame);
 
-    if (MANUAL_HUB) {
-      await D.fadeTo(0, 420);
-      showHub();
-      return;
-    }
-
     const next = nextUnfinishedIndex();
     if (next >= EVENTS.length) {
       D.persist({ chapterDailyDone: true });
+      if (!DEBUG_HUB) { location.href = 'narrative/index.html?phase=after'; return; }
+      await D.fadeTo(0, 420);chapterEl.textContent = "校园日常";showChapterCard();
+      return;
+    }
+
+    if (MANUAL_HUB) {
       await D.fadeTo(0, 420);
-      chapterEl.textContent = "校园日常";
-      showChapterCard();
+      showHub();
+      if (next < EVENTS.length) cueFor(EVENTS[next].id);
       return;
     }
 

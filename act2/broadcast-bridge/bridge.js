@@ -242,12 +242,17 @@
     ctx.drawImage(roomImage(), d.x, d.y, d.w, d.h, d.x, d.y, d.w, d.h);
   }
   function showLines(items, done) {
+    if (window.BGM) BGM.duck(0.55, 400);
     lines = items; lineIndex = 0; action = done; dialog.hidden = false; controls.hidden = true; displayLine();
   }
   function displayLine() {
     const line = lines[lineIndex];
     clearInterval(typeTimer);
-    if (!line) { dialog.hidden = true; const done = action; action = null; done?.(); return; }
+    if (!line) {
+      dialog.hidden = true;
+      if (window.BGM) BGM.unduck(700);
+      const done = action; action = null; done?.(); return;
+    }
     whoEl.textContent = line[0]; lineEl.textContent = "";
     // The first act prints every line a character at a time (34 chars/s);
     // this page keeps the same reading rhythm instead of dropping the whole
@@ -276,6 +281,13 @@
     scene = next; elapsed = 0; autoWalk = false; held.clear();
     controls.hidden = true; dialog.hidden = true; clearInterval(typeTimer); ready.hidden = true; cg.hidden = true;
     shade.style.opacity = "0";
+    if (window.BGM) {
+      if (["board", "split", "timecut", "corridor", "corridorOpen"].includes(next)) {
+        BGM.play("dusk", { fade: 1.6 });
+      } else {
+        BGM.crossfade("radio", 1.4);
+      }
+    }
     if (next === "board") showLines(boardOpeningLines(), () => enter("split"));
     if (next === "corridor") {
       boy.x = L.corridor.boyStartX; boy.y = L.corridor.footY;

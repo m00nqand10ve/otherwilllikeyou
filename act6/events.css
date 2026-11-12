@@ -1,0 +1,661 @@
+/* 第四幕 · 主线里三场 DOM 玩法 — 界面
+ *
+ * 事件 02 的时机面板、事件 05 的纸卡、事件 09 的相纸：
+ * 纸卡用 minigame 里一直没接线的 ui_clue_frame_seen / _guessed /
+ * _remembered（64×64 的九宫格纸框），相纸用 ui_photo_paper.png。
+ * 几场都压在对白层上面一点（z-index 5），不和目录、黑场抢。
+ */
+
+/* ---------------------------------------------------------------- 事件 02 · 课间时机 */
+
+#mgTiming {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 5;
+  width: min(620px, 92vw);
+  max-height: 88dvh;
+  overflow: auto;
+  padding: 18px 20px 14px;
+  background: #211b29f7;
+  border: 1px solid #d9b595;
+  box-shadow: 0 18px 45px #0009;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) translateY(10px);
+  transition: opacity .2s, transform .2s;
+}
+#mgTiming.show { opacity: 1; transform: translate(-50%, -50%); pointer-events: auto; }
+
+/* 等一会儿时只把画面压暗一点，光偏过去；面板和标题不跟着暗。 */
+.timing-dusk {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+  background: #1b1723;
+  transition: opacity .45s linear;
+}
+
+/* 右上角三格课间刻度：走过的变绿，当前是暖色。不做倒计时数字。 */
+.timing-ticks {
+  position: absolute;
+  right: 18px;
+  top: 17px;
+  display: flex;
+  gap: 5px;
+}
+.timing-ticks i { width: 15px; height: 4px; background: #4b3d48; }
+.timing-ticks i.done { background: #8fbf8a; }
+.timing-ticks i.now { background: #ffd497; }
+
+#mgTiming h3 {
+  margin: 0 0 5px;
+  font-size: clamp(16px, 1.6vw, 21px);
+  font-weight: 400;
+  letter-spacing: .16em;
+  color: #ffe6c7;
+}
+.timing-lead {
+  margin: 0 0 13px;
+  font-size: clamp(11px, 1.05vw, 13px);
+  line-height: 1.6;
+  color: #c9b19b;
+}
+
+.timing-slots {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  margin-bottom: 12px;
+}
+.timing-slots button {
+  display: grid;
+  gap: 4px;
+  padding: 10px 10px 9px;
+  background: #2a2333;
+  border: 1px solid #4b3d48;
+  color: #f6ecdf;
+  text-align: left;
+  transition: border-color .15s, background .15s;
+}
+.timing-slots button:hover { background: #342b3f; }
+.timing-slots button.on {
+  border-color: #ffd497;
+  background: #3a2f3a;
+  box-shadow: inset 0 0 0 1px #ffd49755;
+}
+.timing-slots b { font-weight: 400; font-size: clamp(13px, 1.2vw, 16px); letter-spacing: .06em; }
+.timing-slots small { font-size: 10px; color: #a89786; letter-spacing: .04em; }
+
+.timing-note {
+  min-height: 2.6em;
+  margin: 0 0 9px;
+  font-size: clamp(12px, 1.1vw, 14px);
+  line-height: 1.6;
+  color: #d8c8bd;
+}
+
+.timing-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.timing-actions button { padding: 7px 13px; font-size: 13px; }
+.timing-no {
+  display: inline-block;
+  min-width: 1.5em;
+  margin-right: 7px;
+  padding: 0 2px;
+  border: 1px solid #d9b59566;
+  font-size: .82em;
+  text-align: center;
+  color: #ffd497;
+}
+
+.timing-keys { margin: 10px 0 0; font-size: 10px; line-height: 1.5; color: #8b7a84; letter-spacing: .04em; }
+
+@media (max-width: 650px) {
+  #mgTiming { padding: 14px 13px 11px; }
+  .timing-ticks { right: 13px; top: 13px; }
+  .timing-slots { grid-template-columns: 1fr; gap: 6px; }
+  .timing-slots button { grid-template-columns: 4.6em 1fr; align-items: baseline; gap: 8px; }
+  .timing-actions button { padding: 6px 10px; font-size: 12px; }
+}
+
+/* ---------------------------------------------------------------- 事件 05 · 信息卡 */
+
+#mgCards {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 5;
+  width: min(760px, 94vw);
+  max-height: 88dvh;
+  overflow: auto;
+  padding: 18px 20px 14px;
+  background: #211b29f7;
+  border: 1px solid #d9b595;
+  box-shadow: 0 18px 45px #0009;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) translateY(10px);
+  transition: opacity .2s, transform .2s;
+}
+#mgCards.show { opacity: 1; transform: translate(-50%, -50%); pointer-events: auto; }
+
+#mgCards h3 {
+  margin: 0 0 5px;
+  font-size: clamp(16px, 1.6vw, 21px);
+  font-weight: 400;
+  letter-spacing: .16em;
+  color: #ffe6c7;
+}
+#mgCards .cards-lead {
+  margin: 0 0 13px;
+  font-size: clamp(11px, 1.05vw, 13px);
+  line-height: 1.6;
+  color: #c9b19b;
+}
+
+.cards-bank-wrap {
+  margin-bottom: 11px;
+  padding: 8px 10px 10px;
+  background: #1b1723;
+  border: 1px dashed #6b5a4a;
+}
+.bank-label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 10px;
+  letter-spacing: .24em;
+  color: #a89786;
+}
+.cards-bank {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-height: 46px;
+}
+
+.cards-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.cards-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 158px;
+  padding: 6px;
+  background: #241d2c;
+  border: 1px solid #4b3d48;
+  transition: border-color .15s, background .15s;
+}
+.cards-col.armed { border-color: #d9b595; background: #2b2333; }
+
+.col-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 5px 7px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid #4b3d48;
+  border-radius: 0;
+  color: #ffe6c7;
+  text-align: left;
+}
+.col-head:hover { background: #33283a; }
+.col-frame {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+}
+.col-head b {
+  font-weight: 400;
+  font-size: clamp(12px, 1.1vw, 15px);
+  letter-spacing: .06em;
+}
+.col-head small { margin-left: auto; font-size: 10px; color: #a89786; letter-spacing: .04em; }
+
+.col-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 8px;
+}
+
+/* 一张纸卡：九宫格纸框当边框，填色也是纸色，所以文字用深色。 */
+.card-chip {
+  display: block;
+  width: 100%;
+  padding: 8px 8px 9px;
+  border: 6px solid transparent;
+  border-image: url(../assets/minigame/ui_clue_frame_seen.png) 6 fill / 6px / 0 stretch;
+  border-radius: 0;
+  background: none;
+  color: #3a2f2a;
+  font-size: clamp(12px, 1.05vw, 14px);
+  line-height: 1.5;
+  text-align: left;
+  cursor: grab;
+  touch-action: none;
+  transition: filter .12s;
+}
+.card-chip:hover { filter: brightness(1.06); }
+.card-chip:active { cursor: grabbing; }
+.card-chip[data-col="guessed"] { border-image-source: url(../assets/minigame/ui_clue_frame_guessed.png); }
+.card-chip[data-col="unknown"] { border-image-source: url(../assets/minigame/ui_clue_frame_remembered.png); }
+.card-chip.picked,
+.card-chip.in-focus { filter: brightness(1.1); }
+.card-chip.picked { outline: 2px solid #ffd497; outline-offset: 2px; }
+.card-chip.in-focus:not(.picked) { outline: 1px dashed #ffd497aa; outline-offset: 2px; }
+.card-chip .chip-text { display: block; }
+.card-chip .chip-note {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.3;
+  color: #7d6a58;
+}
+
+.card-ghost {
+  position: fixed;
+  z-index: 40;
+  max-width: 230px;
+  padding: 7px 9px;
+  background: #f3e6cf;
+  border: 1px solid #8a6f5e;
+  box-shadow: 0 8px 20px #000a;
+  color: #3a2f2a;
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+  transform: translate(6px, 6px);
+}
+
+.cards-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 11px;
+}
+#cardsCount { margin-right: auto; font-size: 11px; letter-spacing: .12em; color: #c9b19b; }
+.cards-foot button { padding: 6px 12px; font-size: 13px; }
+#cardsSilent { background: #3a3040; border-color: #8b7c86; }
+
+.cards-keys { margin: 9px 0 0; font-size: 10px; line-height: 1.5; color: #8b7a84; letter-spacing: .04em; }
+
+/* ---------------------------------------------------------------- 事件 04 · 公告栏 */
+
+#mgBulletin {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 5;
+  width: min(700px, 94vw);
+  max-height: 88dvh;
+  overflow: auto;
+  padding: 16px 18px 12px;
+  background: #211b29f7;
+  border: 1px solid #d9b595;
+  box-shadow: 0 18px 45px #0009;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) translateY(10px);
+  transition: opacity .2s, transform .2s;
+}
+#mgBulletin.show { opacity: 1; transform: translate(-50%, -50%); pointer-events: auto; }
+
+#mgBulletin h3 {
+  margin: 0 0 4px;
+  font-size: clamp(16px, 1.6vw, 21px);
+  font-weight: 400;
+  letter-spacing: .16em;
+  color: #ffe6c7;
+}
+.bulletin-lead {
+  margin: 0 0 10px;
+  font-size: clamp(11px, 1.05vw, 13px);
+  line-height: 1.6;
+  color: #c9b19b;
+}
+
+/* 朱里 / 由乃的短反馈：写在面板里，不弹对白框、不冻结操作。 */
+.bulletin-say {
+  min-height: 1.6em;
+  margin: -4px 0 8px;
+  font-size: clamp(11px, 1.05vw, 13px);
+  line-height: 1.5;
+  color: #ffd497;
+  opacity: 0;
+  transition: opacity .18s;
+}
+.bulletin-say.on { opacity: 1; }
+
+/* 板面就是已有的 prop_bulletin_blank.png（256×120），四个槽位由 DOM 定位。 */
+.bulletin-board {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 256 / 120;
+  background: url(../assets/minigame/act6/prop_bulletin_blank.png) 0 0 / 100% 100% no-repeat;
+  image-rendering: pixelated;
+  border: 1px solid #4b3d48;
+  box-shadow: inset 0 0 40px #0006;
+  transition: box-shadow .3s;
+}
+.bulletin-board.done { box-shadow: inset 0 0 0 2px #ffd497cc, inset 0 0 40px #0006; }
+
+.bulletin-slot {
+  position: absolute;
+  display: grid;
+  place-content: center;
+  gap: 2px;
+  padding: 4px;
+  background: #0000002e;
+  border: 1px dashed #fff0dc99;
+  color: #fff0dc;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s, border-color .15s;
+}
+.bulletin-slot b { font-size: clamp(10px, 1vw, 13px); font-weight: 400; letter-spacing: .1em; }
+.bulletin-slot small { font-size: 9px; letter-spacing: .06em; color: #ffe6c7aa; }
+.bulletin-slot:hover,
+.bulletin-slot:focus-visible { background: #ffd49722; border-color: #ffd497; outline: none; }
+.bulletin-slot.cursor { border-color: #ffd497cc; }
+.bulletin-slot.filled { border-color: transparent; background: none; cursor: default; }
+.bulletin-slot.filled b,
+.bulletin-slot.filled small { display: none; }
+
+.bulletin-slot[data-slot="title"] { left: 20%; top: 5%; width: 60%; height: 18%; }
+.bulletin-slot[data-slot="photo"] { left: 5%; top: 28%; width: 30%; height: 46%; }
+.bulletin-slot[data-slot="time"] { left: 38%; top: 24%; width: 57%; height: 20%; }
+.bulletin-slot[data-slot="join"] { left: 38%; top: 47%; width: 57%; height: 22%; }
+
+/* 材料：纸条 / 活动照片 / 两张信息卡，都用现有纸张配色。 */
+.bulletin-item {
+  background: #f3e6cf;
+  border: 1px solid #8a6f5e;
+  color: #3a2f2a;
+  box-shadow: 0 3px 8px #0005;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  transition: transform .12s, box-shadow .12s;
+}
+.bulletin-item:active { cursor: grabbing; }
+.bulletin-item.kind-title { padding: 7px 14px; }
+.bulletin-item.kind-title .bi-title { font-size: clamp(13px, 1.3vw, 17px); letter-spacing: .12em; }
+.bulletin-item.kind-card { max-width: 190px; padding: 7px 10px; }
+.bulletin-item.kind-card .bi-card-text { font-size: clamp(11px, 1vw, 13px); line-height: 1.45; }
+.bulletin-item.kind-photo { display: grid; justify-items: center; gap: 2px; padding: 4px; }
+.bulletin-item.kind-photo img { display: block; width: 64px; height: 48px; image-rendering: pixelated; }
+.bulletin-item.kind-photo .bi-note { font-size: 9px; color: #7d6a58; }
+.bulletin-item.picked { outline: 2px solid #ffd497; outline-offset: 2px; transform: translateY(-2px); }
+.bulletin-item.in-focus:not(.picked) { outline: 1px dashed #ffd497aa; outline-offset: 2px; }
+.bulletin-item.nope { animation: bulletinNope .26s ease; }
+@keyframes bulletinNope {
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
+}
+
+/* 吸附之后：材料落在槽位里，允许 0–1 度的歪。 */
+.bulletin-slot > .bulletin-item {
+  position: absolute;
+  inset: 3%;
+  display: grid;
+  place-content: center;
+  margin: 0;
+  padding: 3px 5px;
+  cursor: default;
+  overflow: hidden;
+  transform: rotate(var(--tilt, 0deg));
+}
+.bulletin-slot > .bulletin-item.kind-photo { place-content: stretch; padding: 2px; }
+.bulletin-slot > .bulletin-item.kind-photo img { width: 100%; height: 100%; object-fit: cover; }
+.bulletin-slot > .bulletin-item.kind-photo .bi-note { display: none; }
+
+.bulletin-ghost {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  place-content: center;
+  pointer-events: none;
+  opacity: .92;
+  transform: translate(-50%, -50%) rotate(-3deg);
+}
+
+/* 板边的错带：朋友甲 + 剪刀 + 水，只在传话传丢过物品时出现。 */
+.bulletin-joke {
+  position: absolute;
+  right: 2%;
+  bottom: 2%;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  align-items: end;
+  gap: 2px 5px;
+  max-width: 44%;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity .3s, transform .3s;
+  pointer-events: none;
+}
+.bulletin-joke.show { opacity: 1; transform: none; }
+.bulletin-joke .joke-friend {
+  grid-row: 1 / span 2;
+  align-self: end;
+  width: 31px;
+  height: 46px;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+.bulletin-joke .joke-items {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: start;
+  padding: 3px 7px;
+  background: #f3e6cf;
+  border: 1px solid #8a6f5e;
+  color: #3a2f2a;
+  font-size: 12px;
+  line-height: 1.2;
+}
+.bulletin-joke .joke-water { width: 13px; height: 13px; image-rendering: pixelated; }
+.bulletin-joke p {
+  grid-column: 2;
+  justify-self: start;
+  margin: 0;
+  padding: 1px 6px;
+  background: #1b1723c9;
+  font-size: 12px;
+  line-height: 1.3;
+  color: #ffe6c7;
+  white-space: nowrap;
+}
+
+.bulletin-tray {
+  margin-top: 10px;
+  padding: 8px 10px 10px;
+  background: #1b1723;
+  border: 1px dashed #6b5a4a;
+}
+.tray-label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 10px;
+  letter-spacing: .22em;
+  color: #a89786;
+}
+.tray-items { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; min-height: 46px; }
+.bulletin-panel.all-placed .bulletin-tray { display: none; }
+
+.bulletin-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+#bulletinCount { margin-right: auto; font-size: 11px; letter-spacing: .12em; color: #c9b19b; }
+.bulletin-foot button { padding: 6px 14px; font-size: 13px; }
+
+.bulletin-tip {
+  margin: 8px 0 0;
+  font-size: 10px;
+  line-height: 1.5;
+  letter-spacing: .04em;
+  color: #8b7a84;
+}
+
+/* ---------------------------------------------------------------- 事件 09 · 记忆滑块 */
+
+#mgMemory {
+  position: absolute;
+  left: 5%;
+  right: 5%;
+  bottom: 5%;
+  z-index: 5;
+  padding: 12px 18px 13px;
+  background: #1b1723eb;
+  border: 1px solid #d9b595a8;
+  box-shadow: 0 12px 32px #0008;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity .22s, transform .22s;
+}
+#mgMemory.show { opacity: 1; transform: none; pointer-events: auto; }
+
+.memory-top { display: flex; align-items: center; gap: 10px; }
+.memory-step { font-size: 11px; letter-spacing: .18em; color: #c9b19b; }
+.memory-dots { display: flex; gap: 5px; margin-left: auto; }
+.memory-dots i { width: 6px; height: 6px; background: #4b3d48; }
+.memory-dots i.done { background: #8fbf8a; }
+.memory-dots i.now { background: #ffd497; }
+
+.memory-caption { min-height: 5.4em; margin: 7px 0 8px; }
+.memory-caption p {
+  margin: 0 0 2px;
+  font-size: clamp(15px, 1.5vw, 22px);
+  line-height: 1.55;
+  color: #f6ecdf;
+}
+.memory-caption p b { margin-right: 8px; font-weight: 400; font-size: .86em; color: #ffcfaa; }
+.memory-caption.swap { animation: memorySwap .28s ease-out; }
+@keyframes memorySwap {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+.memory-control { display: flex; align-items: center; gap: 9px; }
+.memory-control span {
+  flex: none;
+  font-size: 10px;
+  letter-spacing: .2em;
+  color: #a89786;
+}
+
+#memoryRange {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 22px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+#memoryRange::-webkit-slider-runnable-track {
+  height: 3px;
+  background: linear-gradient(90deg, #3a3040, #7a6a5c, #ffe0ae);
+}
+#memoryRange::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 20px;
+  margin-top: -8.5px;
+  background: #ffe0ae;
+  border: 1px solid #4b3d48;
+  border-radius: 1px;
+}
+#memoryRange::-moz-range-track {
+  height: 3px;
+  background: linear-gradient(90deg, #3a3040, #7a6a5c, #ffe0ae);
+}
+#memoryRange::-moz-range-thumb {
+  width: 12px;
+  height: 20px;
+  background: #ffe0ae;
+  border: 1px solid #4b3d48;
+  border-radius: 1px;
+}
+#memoryRange:focus-visible { outline: 1px solid #ffd497; outline-offset: 2px; }
+
+.memory-note { margin: 3px 0 0; font-size: 10px; line-height: 1.5; color: #a89786; }
+#memoryNext { margin-top: 8px; padding: 6px 15px; font-size: 13px; }
+
+.memory-vignette {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s linear;
+  background: radial-gradient(ellipse at 50% 46%, transparent 32%, rgba(8, 6, 10, .8) 100%);
+}
+
+/* ---------------------------------------------------------------- 事件 09 · 那张照片 */
+
+.memory-photo {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 8, 13, .5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .34s;
+}
+.memory-photo.show { opacity: 1; }
+
+/* 相纸比例就是 ui_photo_paper.png 的 72×88：灰卡区正好在 5.56% / 4.55% / 20.45%。 */
+.memory-polaroid {
+  position: relative;
+  width: min(300px, 44vw);
+  aspect-ratio: 72 / 88;
+  background: url(../assets/minigame/act6/ui_photo_paper.png) 0 0 / 100% 100% no-repeat;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 10px 26px #0009);
+}
+.mp-shot {
+  position: absolute;
+  left: 5.56%;
+  right: 5.56%;
+  top: 4.55%;
+  bottom: 20.45%;
+}
+.mp-shot .photo-stage {
+  inset: auto 0 auto 0;
+  top: 50%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  transform: translateY(-50%);
+}
+
+/* ---------------------------------------------------------------- 小屏 */
+
+@media (max-width: 650px) {
+  #mgCards { padding: 13px 12px 11px; }
+  .cards-bank { grid-template-columns: 1fr; }
+  .cards-cols { gap: 6px; }
+  .cards-col { min-height: 140px; padding: 4px; }
+  .col-head small { display: none; }
+  .cards-foot button { padding: 5px 9px; font-size: 12px; }
+  #mgMemory { left: 3%; right: 3%; bottom: 3%; padding: 10px 12px 11px; }
+  .memory-caption { min-height: 6em; }
+}
+
+@media (max-height: 560px) {
+  .memory-caption { min-height: 3.4em; }
+  #mgMemory { padding: 8px 12px 9px; }
+}

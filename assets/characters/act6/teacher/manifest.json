@@ -1,0 +1,48 @@
+{
+  "character": "teacher",
+  "frameWidth": 48,
+  "frameHeight": 72,
+  "feetBaseline": 70,
+  "frames": 12,
+  "sheet": "teacher_act6_sheet.png",
+  "framePath": "teacher_act6_{index:02d}.png",
+  "animations": {
+    "idleDown": [
+      0,
+      0
+    ],
+    "poseDown": [
+      1,
+      1
+    ],
+    "poseScan": [
+      2,
+      2
+    ],
+    "poseTurn": [
+      3,
+      3
+    ],
+    "walkLeft": [
+      4,
+      7
+    ],
+    "walkRight": [
+      8,
+      11
+    ]
+  },
+  "sources": [
+    "source_poses.png",
+    "source_walk_left.png"
+  ],
+  "paletteColors": 42,
+  "revision": "act4-art-fix-20261112",
+  "pixelRepair": "Frames 0/1/2: explicit 1px glasses; frame 2 raised chin/direct gaze/hand at glasses. Frames 4-7: side glasses; 8-11 exact mirrors.",
+  "mirrors": {
+    "8": 4,
+    "9": 5,
+    "10": 6,
+    "11": 7
+  }
+}

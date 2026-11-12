@@ -1,0 +1,94 @@
+{
+  "character": "boy",
+  "frameWidth": 48,
+  "frameHeight": 72,
+  "feetBaseline": 70,
+  "feetOpaqueY": 69,
+  "frames": 5,
+  "sheet": "boy_umbrella_right_sheet.png",
+  "framePath": "boy_umbrella_right_{index:02d}.png",
+  "animation": {
+    "idleRight": [
+      0,
+      0
+    ],
+    "walkRight": [
+      1,
+      4
+    ]
+  },
+  "grip": [
+    [
+      37,
+      41
+    ],
+    [
+      37,
+      41
+    ],
+    [
+      37,
+      41
+    ],
+    [
+      37,
+      43
+    ],
+    [
+      37,
+      43
+    ]
+  ],
+  "alpha": "binary",
+  "source": "../umbrella_generated/boy_umbrella_user_selected.gif",
+  "sourceGifFrames": [
+    0,
+    1,
+    3,
+    5,
+    7
+  ],
+  "idleNote": "Frame 0 is the selected GIF closed-step neutral pose held still; not an independently animated idle.",
+  "processing": "Exterior-connected background removal; hand-traced canopy removal/crown repair; fixed-shaft/J-handle erasure; nearest native resample; original-walk palette matching; fist touch-up (girl: shaded far sleeve extended 5px to keep shaft clear of face); feet aligned.",
+  "paletteSource": "../frames/13.png through 16.png",
+  "handFront": {
+    "sheet": "boy_umbrella_hand_front_sheet.png",
+    "frameWidth": 48,
+    "frameHeight": 72,
+    "rects": [
+      [
+        36,
+        39,
+        3,
+        5
+      ],
+      [
+        36,
+        39,
+        3,
+        5
+      ],
+      [
+        36,
+        39,
+        3,
+        5
+      ],
+      [
+        36,
+        41,
+        3,
+        5
+      ],
+      [
+        36,
+        41,
+        3,
+        5
+      ]
+    ],
+    "draw": "Draw umbrella back, companion, holder, umbrella front, then this matching hand frame at the exact holder destination rectangle. Use identical integer destination origin and size; do not independently round the hand crop."
+  },
+  "holderSide": "left-of-partner-when-facing-right",
+  "revision": "act4-art-fix-20261112"
+}

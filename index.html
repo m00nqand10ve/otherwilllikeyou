@@ -24,31 +24,32 @@
     position:relative;
     overflow-x:hidden;
   }
-  /* 开始页用最新的散场 CG 压暗做底，和第三幕收尾接上 */
+  /* 开始页：两位主角是画面主体，左侧保留清晰的教室墙面供标题使用。 */
   body::before{
     content:"";
     position:fixed;
     inset:0;
-    background:url("assets/cg/act5/story_g04_exit_512.png") center/cover no-repeat;
+    background:url("assets/scenes/title_corridor_heroes_v2_512.png") center/cover no-repeat;
     image-rendering:pixelated;
-    opacity:.55;
-    filter:saturate(.9);
+    opacity:1;
   }
   body::after{
     content:"";
     position:fixed;
     inset:0;
     background:
-      radial-gradient(ellipse at 50% 45%,rgba(12,8,14,.28),rgba(12,8,14,.93) 72%),
-      linear-gradient(180deg,rgba(10,7,12,.4),rgba(10,7,12,.92));
+      linear-gradient(90deg,rgba(10,7,14,.34),rgba(10,7,14,.08) 58%,transparent 75%),
+      linear-gradient(180deg,rgba(10,7,12,.1),rgba(10,7,12,.26));
   }
   main{
     position:relative;
     z-index:1;
-    width:min(780px,100%);
+    width:min(660px,54vw);
+    margin-left:clamp(20px,5vw,90px);
+    margin-right:auto;
     padding:clamp(26px,4.5vw,52px);
     border:1px solid var(--line);
-    background:rgba(20,15,24,.84);
+    background:rgba(20,15,24,.79);
     box-shadow:0 24px 80px rgba(0,0,0,.62);
     backdrop-filter:blur(6px);
   }
@@ -160,7 +161,7 @@
   }
   @media (max-width:640px){
     body{padding:20px 14px}
-    main{padding:24px 20px}
+    main{width:100%;margin:0;padding:24px 20px}
     .roadmap{grid-template-columns:1fr 1fr}
     .actions{flex-direction:column}
     .actions a,.actions button{text-align:center}
@@ -174,8 +175,8 @@
   <p class="sub">从楼道里的那一局，到走廊里那句还没说出口的话。</p>
   <p class="lead">
     第一幕 · 手机上的那一局；第二幕 · 黑板报与晚间广播；
-    第三幕 · 藏不住的心事与六个普通的课间。
-    从这里开始，一路播到最新的收尾。
+    第三幕 · 藏不住的心事与六个普通的课间；第四幕 · 我所不知道的事。
+    从这里开始，一路走到最新的章节。
   </p>
 
   <div class="actions">
@@ -190,6 +191,7 @@
     <li><b>放学后</b><span>白色护栏</span></li>
     <li><b>第三幕</b><span>藏不住的心事 · 校园日常</span></li>
     <li><b>收尾</b><span>走廊里的那句话 · 本子还没还</span></li>
+    <li><b>第四幕</b><span>我所不知道的事</span></li>
   </ol>
 
   <p class="note">
@@ -198,9 +200,12 @@
   </p>
 </main>
 
+<script src="audio/bgm.js"></script>
 <script>
 (function () {
   "use strict";
+
+  if (window.BGM) BGM.play("title", { fade: 1.4 });
 
   // 全流程用到的存档键。开始完整故事时一并清掉，
   // 否则校园日常会跳过上一轮已经做完的日期。
@@ -215,7 +220,9 @@
     "act3-difficulty-v1",
     "act3-result-v1",
     "our-story-act5-daily-v1",
-    "our-story-act5-narrative-v1"
+    "our-story-act5-narrative-v1",
+    "our-story-act6-v1",
+    "our-story-act6-daily-v1"
   ];
   var DAILY = [
     "errandCompleted", "soloJurieCompleted", "searchCompleted",
@@ -238,11 +245,17 @@
   var dailyAny = DAILY.some(function (key) { return !!daily[key]; });
 
   var resume = null;
-  if (narrative.disclosureHeard) {
+  if (read("our-story-act6-v1")?.event > 0) {
     resume = {
-      href: "act5/narrative/index.html?phase=after",
-      label: "重看收尾 · 本子还没还",
-      note: "已经看到最新剧情。可以重看收尾，或从头再走一次。"
+      href: "act6/index.html",
+      label: "继续 · 我所不知道的事",
+      note: "从第四幕当前的校园时间段继续。"
+    };
+  } else if (narrative.disclosureHeard) {
+    resume = {
+      href: "act6/index.html",
+      label: "继续 · 还本子的早上",
+      note: "从第三幕收尾接到第四幕。"
     };
   } else if (dailyDone) {
     resume = {

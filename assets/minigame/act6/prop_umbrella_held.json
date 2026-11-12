@@ -1,0 +1,73 @@
+{
+  "frameWidth": 96,
+  "frameHeight": 96,
+  "frames": 5,
+  "sheet": "prop_umbrella_held_sheet.png",
+  "tilt": [
+    -2,
+    -1,
+    0,
+    1,
+    2
+  ],
+  "grip": [
+    [
+      48,
+      68
+    ],
+    [
+      48,
+      68
+    ],
+    [
+      48,
+      68
+    ],
+    [
+      48,
+      68
+    ],
+    [
+      48,
+      68
+    ]
+  ],
+  "canopy": [
+    [
+      44,
+      35
+    ],
+    [
+      46,
+      35
+    ],
+    [
+      48,
+      35
+    ],
+    [
+      50,
+      35
+    ],
+    [
+      52,
+      35
+    ]
+  ],
+  "alpha": "binary",
+  "placement": {
+    "holderSide": "left-of-partner-when-facing-right",
+    "twoPersonExample": {
+      "boyX": 248,
+      "partnerX": 292,
+      "feetY": 256
+    },
+    "threePersonExample": {
+      "girlX": 206,
+      "friendX": 240,
+      "boyX": 330,
+      "feetY": 256
+    },
+    "note": "Align shaft grip to actor frame grip (40,36); the raised hand is in front."
+  }
+}

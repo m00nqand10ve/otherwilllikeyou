@@ -1,0 +1,105 @@
+{
+  "revision": "act4-art-fix-20261112",
+  "asset": "umbrellaHeld",
+  "sheet": "prop_umbrella_held_sheet.png",
+  "frameWidth": 96,
+  "frameHeight": 96,
+  "frames": 5,
+  "tilt": [
+    -2,
+    -1,
+    0,
+    1,
+    2
+  ],
+  "tiltDegrees": [
+    -12,
+    -6,
+    0,
+    6,
+    12
+  ],
+  "grip": [
+    [
+      48,
+      68
+    ],
+    [
+      48,
+      68
+    ],
+    [
+      48,
+      68
+    ],
+    [
+      48,
+      68
+    ],
+    [
+      48,
+      68
+    ]
+  ],
+  "canopy": [
+    [
+      39,
+      28
+    ],
+    [
+      44,
+      27
+    ],
+    [
+      48,
+      27
+    ],
+    [
+      52,
+      27
+    ],
+    [
+      57,
+      28
+    ]
+  ],
+  "baseColor": "#b05048",
+  "canopyPalette": [
+    "#3a2226",
+    "#8e3e40",
+    "#b05048",
+    "#c66e60",
+    "#d99078"
+  ],
+  "alpha": "binary",
+  "shaft": "One straight raster line rotated about grip (48,68); hook begins below grip.",
+  "layers": {
+    "back": "prop_umbrella_held_back_sheet.png",
+    "front": "prop_umbrella_held_front_sheet.png",
+    "sameFrameSizeAndGrip": true
+  },
+  "layerOrder": [
+    "umbrellaHeld.back",
+    "companion",
+    "holder",
+    "umbrellaHeld.front",
+    "holder.handFront"
+  ],
+  "layerNote": "The pole goes behind the head/body while tilting, and the canopy stays above both characters. Use both prop layers at the identical destination rectangle. The combined sheet is a fallback only; drawing it over the whole actor makes a tilted pole cross the face.",
+  "holderSide": "left-of-partner-when-facing-right",
+  "placement": {
+    "twoPerson": {
+      "holderX": 248,
+      "partnerX": 282,
+      "feetY": 256
+    },
+    "threePerson": {
+      "girlX": 206,
+      "friendX": 240,
+      "boyX": 330,
+      "feetY": 256
+    },
+    "scale": 1.4
+  },
+  "supersedes": "prop_umbrella_held.json (legacy metadata; use this manifest for new canopy geometry)"
+}

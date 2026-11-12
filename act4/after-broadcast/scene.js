@@ -130,6 +130,7 @@
     osc.start(now); osc.stop(now + duration);
   }
   function say(items, done) {
+    if (window.BGM) BGM.duck(0.55, 400);
     dialogLines = items; dialogIndex = 0; afterDialog = done;
     controls.hidden = true; dialog.hidden = false; showLine();
   }
@@ -138,6 +139,7 @@
     clearInterval(dialogTimer);
     if (!item) {
       dialog.hidden = true;
+      if (window.BGM) BGM.unduck(700);
       const done = afterDialog; afterDialog = null; done?.();
       return;
     }
@@ -254,11 +256,13 @@
       finalLines = false;
     }
     if (next === "memory") {
+      if (window.BGM) BGM.play("memory", { fade: 1.6 });
       cg.src = SRC.final; cg.alt = "和臣与朱里并肩靠在学校走廊的白色护栏前"; cg.hidden = false;
       dialog.classList.add("subtitle-style");
       say(MEMORIES.map((beat) => ["和臣·心声", beat.text]), () => enter("blush"));
     }
     if (next === "blush") {
+      if (window.BGM) BGM.play("dusk", { fade: 1.8 });
       cg.src = SRC.final; cg.hidden = false; blushCut.hidden = false;
       dialog.classList.add("subtitle-style");
       say([["朱里", "和臣？怎么了？"], ["和臣", "没、没什么。"], ["朱里", "可是你脸都红了。"], ["和臣", "我、我先下去了。明天见！"]], () => enter("hurryAway"));
@@ -269,7 +273,10 @@
       dialog.classList.add("subtitle-style");
       say([["朱里", "……明天见，和臣。"]], () => enter("ending"));
     }
-    if (next === "ending") { boy.x = -40; girl.x = 365; ending.hidden = false; }
+    if (next === "ending") {
+      if (window.BGM) BGM.stop({ fade: 2.4 });
+      boy.x = -40; girl.x = 365; ending.hidden = false;
+    }
     updateHint();
   }
   function updateHint() {
@@ -423,7 +430,10 @@
   });
   document.getElementById("replay").addEventListener("click", () => { smallTalk = false; afterTalk = false; windowSeen = false; railTalkSeen = false; captionQueue = []; enter("exit"); });
   Promise.all(Object.entries(SRC).map(async ([key, src]) => { image[key] = await load(src); }))
-    .then(() => enter("exit"))
+    .then(() => {
+      if (window.BGM) BGM.play("dusk", { fade: 1.6 });
+      enter("exit");
+    })
     .catch((err) => { ending.hidden = false; ending.querySelector("h1").textContent = "场景资源加载失败"; ending.querySelector("p").textContent = err.message; });
   requestAnimationFrame(loop);
   window.__afterBroadcast = {

@@ -1,0 +1,16 @@
+{
+  "width": 512,
+  "height": 288,
+  "paletteColorsMax": 64,
+  "photoSafeZone": [
+    64,
+    0,
+    448,
+    288
+  ],
+  "standingFeetY": [
+    246,
+    262
+  ],
+  "source": "source/school_playground_source.png"
+}

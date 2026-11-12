@@ -4,7 +4,7 @@
  * 只查三件容易断掉的事：
  *   1. 根目录 index.html 是一个真正的开始页，能从第一幕一路播到最新；
  *   2. 「开始完整故事」会清掉各幕存档，避免校园日常跳过已经做过的日期；
- *   3. 「继续上次」按本机进度指向校园日常 / 收尾，收尾的「回到开头」能跳出 storyframe。
+ *   3. 「继续上次」按本机进度指向校园日常 / 收尾 / 第四幕，收尾的「去还本子」能跳出 storyframe。
  *
  * 各幕自己的玩法由 act5/tools/check.cjs、act5/narrative/tools/check.cjs 和
  * game/dust-corridor/tools/story-chain-check.mjs 检查；这里只验接缝。
@@ -45,6 +45,8 @@ const read = (file) => fs.readFileSync(path.join(ROOT, file), "utf8");
       localStorage.setItem("our-story-bridge-papers-v1", "1");
       localStorage.setItem("act3-difficulty-v1", "电台");
       localStorage.setItem("act3-result-v1", JSON.stringify({ relaysCaught: 1, relaysTotal: 5 }));
+      localStorage.setItem("our-story-act6-v1", JSON.stringify({ event: 3 }));
+      localStorage.setItem("our-story-act6-daily-v1", JSON.stringify({ relay: { done: true } }));
     });
     await page.click("#start");
     await page.waitForURL(/prototype\.html/, { timeout: 10000 });
@@ -54,11 +56,14 @@ const read = (file) => fs.readFileSync(path.join(ROOT, file), "utf8");
       boardEval: localStorage.getItem("our-story-act2-board-eval-v1"),
       papers: localStorage.getItem("our-story-bridge-papers-v1"),
       difficulty: localStorage.getItem("act3-difficulty-v1"),
-      result: localStorage.getItem("act3-result-v1")
+      result: localStorage.getItem("act3-result-v1"),
+      act6: localStorage.getItem("our-story-act6-v1"),
+      act6Daily: localStorage.getItem("our-story-act6-daily-v1")
     }));
     if (left.daily !== null || left.act3 !== null) fail("开始完整故事没有清掉旧存档");
     if (left.boardEval !== null || left.papers !== null) fail("开始完整故事没有清掉第二幕的回响存档");
     if (left.difficulty !== null || left.result !== null) fail("开始完整故事没有清掉第三幕的难度/成绩存档");
+    if (left.act6 !== null || left.act6Daily !== null) fail("开始完整故事没有清掉第四幕的存档");
 
     // 只做了一点日常：继续上次应该回到校园日常
     await page.goto(indexUrl);
@@ -80,17 +85,32 @@ const read = (file) => fs.readFileSync(path.join(ROOT, file), "utf8");
     resumeHref = await page.locator("#resume").getAttribute("href");
     if (resumeHref !== "act5/narrative/index.html?phase=after") fail(`六个日常之后指向 ${resumeHref}`);
 
-    // 已经看过最新收尾：继续上次改成重看收尾
+    // 已经看过第三幕收尾：继续上次接「还本子的早上」，也就是第四幕开头
     await page.evaluate(() => localStorage.setItem(
       "our-story-act5-narrative-v1", JSON.stringify({ disclosureHeard: true })));
     await page.reload();
+    resumeHref = await page.locator("#resume").getAttribute("href");
+    if (resumeHref !== "act6/index.html") fail(`第三幕收尾之后指向 ${resumeHref}`);
     const resumeText = await page.locator("#resume").textContent();
-    if (!resumeText.includes("重看收尾")) fail(`看到收尾之后按钮是「${resumeText}」`);
+    if (!resumeText.includes("还本子的早上")) fail(`第三幕收尾之后按钮是「${resumeText}」`);
+
+    // 第四幕已经开过：继续上次直接回第四幕当前时间段
+    await page.evaluate(() => localStorage.setItem(
+      "our-story-act6-v1", JSON.stringify({ event: 3 })));
+    await page.reload();
+    resumeHref = await page.locator("#resume").getAttribute("href");
+    if (resumeHref !== "act6/index.html") fail(`第四幕进行中指向 ${resumeHref}`);
+    if (!(await page.locator("#resume").textContent()).includes("我所不知道的事")) {
+      fail("第四幕进行中，按钮没有写第四幕的标题");
+    }
 
     // 接缝的静态检查
     const narrative = read("act5/narrative/story.js");
-    if (!narrative.includes('"../../index.html", "回到开头"')) fail("收尾没有回到根目录开始页");
-    if (!narrative.includes("{ top: true }")) fail("收尾的回到开头没有指定跳出 storyframe");
+    if (!narrative.includes('"../../act6/index.html", "第二天 · 去还本子"')) {
+      fail("第三幕收尾没有接到第四幕");
+    }
+    if (!narrative.includes("{ top: true }")) fail("收尾的第四幕入口没有指定跳出 storyframe");
+    if (!fs.existsSync(path.join(ROOT, "act6/index.html"))) fail("第四幕入口 act6/index.html 不存在");
     if (!read("act4/after-broadcast/index.html").includes("../../act5/narrative/index.html")) {
       fail("第四幕没有接入第三幕剧情");
     }

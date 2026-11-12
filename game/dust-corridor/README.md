@@ -242,9 +242,3 @@ Issues and pull requests welcome.
   the contract: it covers hit registration, movement, the pointer-lock
   teardown, offline integrity and a set of visual assertions about exposure and
   shadows.
-- Read `HANDOFF.md` first. It records the traps this codebase has already cost
-  somebody a day to find — several bugs here looked like subjective "feel"
-  complaints and turned out to be measurable defects.
-- `WORKBENCH.md` is the running log of the visual improvement loop, including
-  which critic findings survived being checked against the pixels and which
-  did not.

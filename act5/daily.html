@@ -12,6 +12,7 @@
   <img id="storyCg" class="story-cg" src="" alt="" hidden>
 
   <div id="chapter">校园日常</div>
+  <div id="campusNarration" class="campus-narration" hidden></div>
 
   <!-- G01 换人条：三个站位，亮着的人在做自己的事，做完的打勾。
        只在这一场做事阶段出现；Tab 也能轮换。 -->
@@ -50,13 +51,13 @@
     <small>E / 空格 / 点击继续</small>
   </div>
 
-  <!-- 章节目录：只在 ?hub=1 时作调试 / 单场入口；正常进入是自动时间线 -->
+  <!-- 章节目录：默认显示（校园目录）；?auto=1 走自动时间线，?hub=1 是调试展开 -->
   <div id="hub" class="hub" hidden>
     <h1>第三幕 · 校园日常</h1>
-    <p class="sub">那些没说出口的话</p>
+    <p class="sub">在校园里走走，再去今天约好的地方。已经过的日子可以重访。</p>
     <ul id="hubList"></ul>
     <div class="row">
-      <button id="hubStart" type="button">按顺序开始</button>
+      <button id="hubStart" type="button">从今天继续</button>
       <button id="hubReset" type="button">清掉存档</button>
     </div>
     <a id="afterStoryHub" class="story-link" href="narrative/index.html?phase=after" hidden>继续 · 走廊里的那句话</a>
@@ -195,6 +196,7 @@
   </div>
 </main>
 
+<script src="../audio/bgm.js"></script>
 <script src="core.js"></script>
 <script src="trio.js"></script>
 <script src="explore.js"></script>
@@ -203,6 +205,7 @@
 <script src="solo.js"></script>
 <script src="wordgame.js"></script>
 <script src="ball.js"></script>
+<script src="../shared/campus-route.js"></script>
 <script src="shell.js"></script>
 </body>
 </html>

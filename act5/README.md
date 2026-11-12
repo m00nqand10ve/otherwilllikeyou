@@ -29,11 +29,12 @@ Web Audio 现场合成的）。
 | 周五 | G03 课间猜人物 | 可玩 | `wordGameCompleted` / `wordGameCorrect` / `wordGameHints` |
 | 下周一 | G04 体育活动 | 可玩 | `ballGameCompleted`（比分不进存档） |
 
-默认进入 `daily.html` 就按自动时间线走：周一 → 周二 → 周三 → 周四 → 周五 → 下周一，
+默认进入 `daily.html` 是校园目录：在走廊里走到今天的地点，按 E 开始。`?auto=1` 走旧的
+自动时间线：周一 → 周二 → 周三 → 周四 → 周五 → 下周一，
 跨日时压一张日期卡（图标复用 `assets/minigame/icon_day_*.png`；底图周一 / 周五用
 `assets/cg/act5/` 的过门 CG，下周一用楼前空地 cutscene，周三没有对应 CG，先用走廊图压暗占位）。
 全做完了直接出整章结果卡。重新进入时从第一个没做完的日期续播。
-`?hub=1` 才显示单场目录，用于调试、单场重玩和清存档。
+`?hub=1` 只是调试展开目录，用于单场重玩和清存档。
 G04 收掉比分 HUD 后先放 `assets/cg/act5/story_g04_exit_512.png`（球停、三个人收东西），再出整章结果卡。
 
 > 这一章在完整流程里是从 `narrative/` 的前半段接进来的，结束后再回 `narrative/index.html?phase=after`；
@@ -56,7 +57,7 @@ G04 收掉比分 HUD 后先放 `assets/cg/act5/story_g04_exit_512.png`（球停�
 | `ball.js` | G04《体育活动》俯视 2.5D 球场，1 对 2 先进三球：WASD 跑位、蓄力时 A/D 转角度 + W/S 调高度、抢断圈上/下博弈、由乃的假动作、朱里的慢半拍 |
 | `shell.js` | 章节壳：加载资源、自动时间线 / 可选目录、跨日卡、按键路由（含把 `F` 统一交给 `D.poke()`）、收尾时统一调 `dispose()` |
 | `tools/check.cjs` | 自检（静态 + 浏览器把四个游戏各走一遍，含四场主动互动与几何不重叠）；带 `?hub=1` 从目录逐场进 |
-| `tools/playall.cjs` | 默认自动时间线整链路通关，四场各按一次 F、两块插曲各点一次，并核对四张日期卡 |
+| `tools/playall.cjs` | 带 `?auto=1` 走自动时间线整链路通关，四场各按一次 F、两块插曲各点一次，并核对四张日期卡 |
 
 `trio.js` 和 `explore.js` 是两套走位，不是重复：
 
@@ -396,7 +397,7 @@ G04「喊一声」只让场上的人接一句话。互动性加在「那段时�
 | 朱里 | 33 | 同上 |
 | 由乃 | 36 | 0–8 是原九帧待机；9–11 侧面背面；12–27 四向行走；28–35 剧情动作 |
 
-生成脚本是 `tools/build-character-asset-packs.py`，说明见 `assets/characters/CHARACTER_ASSETS_V2.md`。
+生成脚本是 `tools/build-character-asset-packs.py`。
 早先那版用九帧 GIF 拼占位帧的 `act5/assets/friend_sheet.png` 已经删掉——v2 之后没人引用了。
 
 > **改精灵表时记得同步 `daily.css` 里 `.f-*` 的 `background-size`。**
@@ -409,7 +410,7 @@ G04「喊一声」只让场上的人接一句话。互动性加在「那段时�
 
 ```
 node act5/tools/check.cjs       # 静态 + 四个游戏各走一遍（?hub=1 从目录进）
-node act5/tools/playall.cjs     # 默认自动时间线整链路
+node act5/tools/playall.cjs     # ?auto=1 自动时间线整链路
 ```
 
 - **静态**：三张精灵表尺寸与帧数、`.face` 的 `background-size`、脚本无 ES module 语法、
@@ -645,7 +646,8 @@ DOM class 和 `localStorage` 做行为断言，**不做像素断言**；G04 用�
     盖在黑场上（它排在 `#fade` 后面并带 `z-index: 20`），日期卡退场后：
     周一补一句站位提示再交给 G01，其余三天直接交给游戏自己的日期开场。
     `D.audio.bell()` 补了铃：周一开场一次、周五下课后一次；其余跳切不硬塞声音。
-    默认进入不再显示目录；要单场重玩或清存档用 `daily.html?hub=1`。
+    默认进入就是校园目录；`daily.html?hub=1` 会把目录展开，方便单场重玩或清存档，
+    `?auto=1` 才走旧的自动时间线。
 
 30. **射门方向要按「角度」调，不能只推门线落点。** 直接给 `aimX` 加固定速度，
     离门近时左右横移快、离门远时慢，手感不一致，玩家也不知道自己在转多少度。

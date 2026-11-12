@@ -275,9 +275,14 @@
     return true;
   }
   function lines(items, done) {
+    if (window.BGM) BGM.duck(0.55, 400);
     let i = 0;
     const step = () => {
-      if (i >= items.length) { if (done) done(); return; }
+      if (i >= items.length) {
+        if (window.BGM) BGM.unduck(700);
+        if (done) done();
+        return;
+      }
       const it = items[i++];
       say(it[0], it[1], step);
     };
@@ -1097,6 +1102,7 @@
     sc.state = "intro";
     sc.t = 0;
     sc.walk = 0;
+    if (window.BGM) BGM.play("radio", { fade: 1.2 });
     sc.everCleared = !!SAVE.cleared;
     sc.cam.z = 1.55;
     sc.cam.x = 256;
@@ -1150,6 +1156,8 @@
 
   function startCheck() {
     sc.state = "check";
+    // 试音开始就把声音交给 act3/audio.js：节拍器不能被场景音乐盖住
+    if (window.BGM) BGM.stop({ fade: 0.8 });
     audio.unlock().then(() => {
       sc.check = {
         start: audio.now() + 1.1,
