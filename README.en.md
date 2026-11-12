@@ -1,3 +1,7 @@
+> Other people will like you, but no one else will be like you.
+>
+> This game is adapted from the author's real experiences. We hope all of us are treated well.
+
 # Our Story · A Pixel Narrative
 
 [简体中文](README.md) · **English**
